@@ -17,8 +17,10 @@ Two rules make the answers trustworthy:
 This is the same division the matching engine keeps: Python decides, the model
 explains. It is what allows the reported match rate to mean anything.
 
-Without an API key the module degrades to a deterministic summary rather than
-failing — the dashboard must remain demonstrable with no network.
+The provider is interchangeable, because none of the above depends on which
+model answers. Anthropic and Gemini are both supported; whichever key is
+present is used. Without either, the module degrades to a deterministic summary
+rather than failing — the dashboard must remain demonstrable with no network.
 """
 from __future__ import annotations
 
@@ -30,7 +32,9 @@ from typing import Optional
 from .config import ensure_loaded
 from .models import ExceptionCode, ReconResult
 
-MODEL = "claude-opus-5"
+ANTHROPIC_MODEL = "claude-opus-5"
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_ROOT = "https://generativelanguage.googleapis.com/v1beta"
 MAX_ROWS = 40
 
 SYSTEM = """You answer questions about a completed settlement reconciliation for \
@@ -153,44 +157,117 @@ def _deterministic_answer(result: ReconResult, question: str,
 # Ask
 # ---------------------------------------------------------------------------
 
-def available() -> bool:
+def provider() -> Optional[str]:
+    """Which model backend is configured, if any.
+
+    Anthropic wins when both are present, for no reason beyond needing a
+    deterministic answer when asked twice.
+    """
     ensure_loaded()
-    return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
+    if os.getenv("ANTHROPIC_API_KEY", "").strip():
+        return "anthropic"
+    if os.getenv("GEMINI_API_KEY", "").strip() or os.getenv("GOOGLE_API_KEY", "").strip():
+        return "gemini"
+    return None
+
+
+def available() -> bool:
+    return provider() is not None
+
+
+def _gemini_key() -> str:
+    return (os.getenv("GEMINI_API_KEY", "").strip()
+            or os.getenv("GOOGLE_API_KEY", "").strip())
+
+
+def _gemini_model() -> str:
+    """Resolve a model that this key can actually call.
+
+    Model names move around, and a stale default 404s. Asking the API which
+    models support generateContent is cheaper than being wrong in a demo.
+    """
+    import requests
+    preferred = os.getenv("GEMINI_MODEL", "").strip()
+    if preferred:
+        return preferred
+    try:
+        resp = requests.get(f"{GEMINI_ROOT}/models",
+                            params={"key": _gemini_key()}, timeout=15)
+        resp.raise_for_status()
+        usable = [
+            m["name"].removeprefix("models/")
+            for m in resp.json().get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        for want in ("gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"):
+            if want in usable:
+                return want
+        if usable:
+            return usable[0]
+    except Exception:
+        pass
+    return GEMINI_MODEL
+
+
+def _ask_gemini(facts: str, question: str) -> str:
+    import requests
+    model = _gemini_model()
+    resp = requests.post(
+        f"{GEMINI_ROOT}/models/{model}:generateContent",
+        params={"key": _gemini_key()},
+        json={
+            "systemInstruction": {"parts": [{"text": SYSTEM}]},
+            "contents": [{"role": "user", "parts": [{
+                "text": f"Reconciliation facts:\n\n{facts}\n\nQuestion: {question}"
+            }]}],
+            "generationConfig": {"temperature": 0, "maxOutputTokens": 2048},
+        },
+        timeout=60,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Gemini returned {resp.status_code}: {resp.text[:200]}")
+    body = resp.json()
+    candidates = body.get("candidates") or []
+    if not candidates:
+        raise RuntimeError(f"Gemini returned no candidates: {str(body)[:200]}")
+    parts = candidates[0].get("content", {}).get("parts", [])
+    return "".join(p.get("text", "") for p in parts).strip()
+
+
+def _ask_anthropic(facts: str, question: str) -> str:
+    import anthropic
+    client = anthropic.Anthropic()
+    response = client.messages.create(
+        model=ANTHROPIC_MODEL,
+        max_tokens=16000,
+        system=SYSTEM,
+        thinking={"type": "adaptive"},
+        messages=[{"role": "user", "content": (
+            f"Reconciliation facts:\n\n{facts}\n\nQuestion: {question}"
+        )}],
+    )
+    return "".join(b.text for b in response.content if b.type == "text").strip()
 
 
 def ask(result: ReconResult, question: str) -> Answer:
     """Answer a question using only what this reconciliation established."""
     context, n_rows = select_context(result, question)
+    which = provider()
 
-    if not available():
-        return _deterministic_answer(result, question, context)
-
-    try:
-        import anthropic
-    except ImportError:
+    if which is None:
         return _deterministic_answer(result, question, context)
 
     facts = "\n".join(context)
     try:
-        client = anthropic.Anthropic()
-        response = client.messages.create(
-            model=MODEL,
-            max_tokens=16000,
-            system=SYSTEM,
-            thinking={"type": "adaptive"},
-            messages=[{
-                "role": "user",
-                "content": (
-                    f"Reconciliation facts:\n\n{facts}\n\n"
-                    f"Question: {question}"
-                ),
-            }],
-        )
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
-        if not text:
-            return _deterministic_answer(result, question, context)
-        return Answer(text=text, rows_used=n_rows, grounded=True, model=MODEL)
+        if which == "anthropic":
+            text, name = _ask_anthropic(facts, question), ANTHROPIC_MODEL
+        else:
+            text, name = _ask_gemini(facts, question), _gemini_model()
     except Exception as exc:
         fallback = _deterministic_answer(result, question, context)
-        fallback.text += f"\n\n(Model call failed: {exc})"
+        fallback.text += f"\n\n({which} call failed: {exc})"
         return fallback
+
+    if not text:
+        return _deterministic_answer(result, question, context)
+    return Answer(text=text, rows_used=n_rows, grounded=True, model=name)

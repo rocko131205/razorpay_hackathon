@@ -157,6 +157,8 @@ cp .env.example .env      # then paste your keys into it
 RAZORPAY_KEY_ID=rzp_test_xxx       # Dashboard -> Test Mode -> Account & Settings -> API Keys
 RAZORPAY_KEY_SECRET=xxx
 ANTHROPIC_API_KEY=sk-ant-xxx       # console.anthropic.com -> API Keys
+# ...or instead:
+GEMINI_API_KEY=AIzaxxx             # aistudio.google.com/apikey (free tier)
 ```
 
 Exported shell variables take precedence over the file. Both are optional and the sidebar shows which are active — absent either, the app falls back and says so on screen rather than failing.
@@ -177,7 +179,7 @@ The controller's real question is never *"what is a chargeback"*. It is *"why is
 
 `recon/qa_agent.py` answers from the match ledger and nothing else. Retrieval is deterministic — Python selects the relevant rows before the model is called, so the model never searches and never has to be trusted to find the right record. It is then forbidden from calculating: every figure it can quote is pre-computed and handed to it. The dashboard shows exactly what it was allowed to see.
 
-Uses `claude-opus-5`. With no key configured, the same question is answered directly from the ledger.
+Either Anthropic (`claude-opus-5`) or Gemini works — the grounding lives in the retrieval layer, not in which model answers, so the provider is interchangeable. With no key configured, the same question is answered directly from the ledger.
 
 ## The screens
 
@@ -219,4 +221,4 @@ Recorded in full in [`DECISIONS.md`](DECISIONS.md), each with a named regression
 - Match rates and accuracy are measured against generated data with a known answer key. Real merchant data is messier, and the honest expectation is that the weak tiers degrade first.
 - The bank stage assumes one credit per UTR. Merchants whose bank merges or splits payouts would need that relaxed.
 - Ambiguous pairs are escalated, never resolved. Resolving them needs information the settlement report does not carry.
-- The live model path is written against the documented SDK but was **not** exercised — no API key was available during development. The ledger-only fallback is tested and is what runs by default.
+- Neither live model path was exercised — no API key was available during development. Both are written against documented interfaces, but the ledger-only fallback is what is tested and what runs by default.

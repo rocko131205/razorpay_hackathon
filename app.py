@@ -347,8 +347,8 @@ def page_ask() -> None:
                     '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
         return
 
-    live = qa_agent.available()
-    model_state = ("<b style='color:var(--c-green);'>connected</b>" if live
+    which = qa_agent.provider()
+    model_state = (f"<b style='color:var(--c-green);'>{which}</b>" if which
                    else "not configured — answers come straight from the ledger")
     st.markdown(
         f'<div style="font-size:11px;color:var(--c-text2);line-height:1.8;'
@@ -468,7 +468,7 @@ def main() -> None:
         result = st.session_state.get("result")
         st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
         rzp = razorpay_client.available()
-        llm = qa_agent.available()
+        which = qa_agent.provider()
         st.markdown(
             f'<div style="font-size:9px;color:var(--c-text3);line-height:2;'
             f'letter-spacing:0.06em;">'
@@ -476,8 +476,8 @@ def main() -> None:
             f'{"var(--c-green)" if rzp else "var(--c-text3)"};">'
             f'{"■ TEST MODE" if rzp else "□ SYNTHETIC"}</span><br>'
             f'MODEL&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:'
-            f'{"var(--c-green)" if llm else "var(--c-text3)"};">'
-            f'{"■ CONNECTED" if llm else "□ LEDGER ONLY"}</span><br>'
+            f'{"var(--c-green)" if which else "var(--c-text3)"};">'
+            f'{"■ " + which.upper() if which else "□ LEDGER ONLY"}</span><br>'
             f'ENGINE&nbsp;&nbsp;<span style="color:var(--c-green);">■ DETERMINISTIC</span><br>'
             f'RESULT&nbsp;&nbsp;<span style="color:'
             f'{"var(--c-green)" if result else "var(--c-text3)"};">'

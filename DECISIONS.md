@@ -91,3 +91,16 @@ A keyed `text_input` ignores a new `value` once the widget exists, so the
 example-question buttons write into `st.session_state["q_input"]` and rerun
 instead. Streamlit also paints `stNumberInputContainer` white regardless of
 theme, which had to be named explicitly in the stylesheet.
+
+## Why the model provider is swappable
+
+The Q&A layer supports Anthropic and Gemini and uses whichever key is present.
+That is possible because nothing about the design depends on which model
+answers: Python does the retrieval, Python does the arithmetic, and the model
+is handed a fixed set of pre-computed facts with instructions not to compute.
+A provider swap changes one function call.
+
+If the grounding lived in the prompt — "please only use the data below" — the
+provider would matter a great deal, because the guarantee would rest on the
+model's compliance. It does not; it rests on the model never being given the
+raw rows in the first place.

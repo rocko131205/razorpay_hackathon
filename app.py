@@ -18,7 +18,7 @@ from pathlib import Path
 import streamlit as st
 
 from recon.matcher import load_bank, load_orders, load_payments, reconcile
-from recon.metrics import score
+from recon.metrics import resolution, score
 from recon.models import SEVERITY, ExceptionCode
 from ui import components as ui
 
@@ -36,12 +36,28 @@ def ensure_data(n_orders: int, seed: int) -> dict:
     return json.loads((DATA / "ground_truth.json").read_text(encoding="utf-8"))
 
 
-def run_cycle(truth: dict):
+def run_cycle(truth: dict, cycle: int = 1):
+    """Reconcile one cycle.
+
+    Cycle two sees everything cycle one saw plus the rows that had not been
+    reported yet, which is what lets carried-forward findings close.
+    """
+    payments = load_payments(DATA / "razorpay_recon.csv")
+    bank_path = DATA / "bank_statement.csv"
+    utr = truth["settlement_utr"]
+
+    if cycle == 2:
+        nxt = DATA / "razorpay_recon_cycle2.csv"
+        if nxt.exists():
+            payments = payments + load_payments(nxt)
+        b2 = DATA / "bank_statement_cycle2.csv"
+        if b2.exists():
+            bank_path = b2
+        utr = truth["next_cycle_utr"]
+
     return reconcile(
-        load_orders(DATA / "orders.csv"),
-        load_payments(DATA / "razorpay_recon.csv"),
-        load_bank(DATA / "bank_statement.csv"),
-        settlement_utr=truth["settlement_utr"],
+        load_orders(DATA / "orders.csv"), payments, load_bank(bank_path),
+        settlement_utr=utr,
         fee_rate=truth["fee_rate"],
         gst_on_fee=truth["gst_on_fee"],
     )
@@ -66,8 +82,16 @@ def page_run(truth: dict) -> None:
         unsafe_allow_html=True,
     )
 
-    if st.button("▶  RUN RECONCILIATION", key="run_btn"):
-        st.session_state["result"] = run_cycle(truth)
+    c1, c2, _ = st.columns([1, 1, 2])
+    if c1.button("▶  RUN CYCLE 1", key="run_btn", use_container_width=True):
+        st.session_state["result"] = run_cycle(truth, cycle=1)
+        st.session_state["cycle"] = 1
+        st.session_state.pop("result2", None)
+    if c2.button("▶▶  RUN NEXT CYCLE", key="run_btn2", use_container_width=True,
+                 disabled="result" not in st.session_state,
+                 help="Tomorrow's report arrives. Carried-forward findings resolve or harden."):
+        st.session_state["result2"] = run_cycle(truth, cycle=2)
+        st.session_state["cycle"] = 2
 
     result = st.session_state.get("result")
     if result is None:
@@ -101,6 +125,24 @@ def page_run(truth: dict) -> None:
             f'{phantom} have no corresponding settled row at all.<br>'
             f'<span style="color:var(--c-text3);">The engine escalates both rather '
             f'than guessing: a wrong pairing corrupts two rows, not one.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    r2 = st.session_state.get("result2")
+    if r2 is not None:
+        ui.hr()
+        ui.section("Closing the Loop",
+                   "The next cycle's rows arrive — findings resolve or harden")
+        res = resolution(result, r2, truth)
+        ui.loop_table(res)
+        st.markdown(
+            f'<div style="margin-top:12px;font-size:11px;color:var(--c-text2);'
+            f'border-left:2px solid var(--c-green);padding-left:12px;line-height:1.7;">'
+            f'Match rate moved from <b>{result.match_rate:.1f}%</b> to '
+            f'<b style="color:var(--c-green);">{r2.match_rate:.1f}%</b> without a single '
+            f'rule changing. The engine did not become smarter — it stopped being asked '
+            f'to answer a question the data could not yet support.'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -188,13 +230,16 @@ def page_accuracy(truth: dict) -> None:
         return
 
     s = score(result, truth)
-    o = s["overall"]
+    inf = s["inferred"]["overall"]
+    m = s["matching"]
 
     tiles = [
-        ("PRECISION", f"{o['precision']:.3f}", "of raised exceptions were real", "good"),
-        ("RECALL", f"{o['recall']:.3f}", "of planted defects were found", "good"),
-        ("FALSE ALARMS", f"{o['fp']}", "raised but not real", "bad" if o["fp"] else "good"),
-        ("MISSED", f"{o['fn']}", "real but not raised", "bad" if o["fn"] else "good"),
+        ("MATCH RATE", f"{m['match_rate']:.1f}%", f"{m['unmatched']} escalated", "warn"),
+        ("INFERRED PRECISION", f"{inf['precision']:.3f}", f"{inf['fp']} false alarms",
+         "bad" if inf["fp"] else "good"),
+        ("INFERRED RECALL", f"{inf['recall']:.3f}", f"{inf['fn']} missed",
+         "bad" if inf["fn"] else "good"),
+        ("THROUGHPUT", f"{result.throughput:,.0f}/s", "orders per second", "good"),
     ]
     for col, (lbl, val, note, cls) in zip(st.columns(4), tiles):
         col.markdown(
@@ -205,26 +250,32 @@ def page_accuracy(truth: dict) -> None:
         )
 
     ui.hr()
-    ui.metrics_table(s["per_type"])
+    ui.section("Inferred Checks",
+               "Conclusions the engine worked out — these are scored")
+    ui.inferred_table(s["inferred"]["per_type"])
 
+    ui.hr()
+    ui.section("Reported, Not Inferred",
+               "Checks that repeat a field Razorpay already populated")
+    ui.labelled_table(s["labelled"]["per_type"])
     st.markdown(
-        f'<div style="margin-top:18px;font-size:11px;color:var(--c-text2);'
-        f'border-left:2px solid var(--c-accent);padding-left:12px;line-height:1.8;">'
-        f'<b style="color:var(--c-accent);">Reading these numbers honestly.</b><br>'
-        f'The match rate ({result.match_rate:.1f}%) is the hard figure — it reflects '
-        f'pairing under missing and colliding identifiers. Classification scores '
-        f'higher because once a row is paired, deciding <i>what</i> is wrong with it '
-        f'is deterministic: Razorpay labels the row type and the fee check is '
-        f'arithmetic. The generator plants sub-rupee fee drift specifically to prove '
-        f'the overcharge threshold does not fire on rounding noise.'
-        f'</div>',
+        '<div style="margin-top:10px;font-size:11px;color:var(--c-text2);'
+        'border-left:2px solid var(--c-accent);padding-left:12px;line-height:1.7;">'
+        'These are deliberately shown without precision or recall. Razorpay\'s recon '
+        'report carries a <code>type</code> column, so detecting a chargeback means '
+        'reading it. Such a check cannot be wrong, and scoring it would inflate the '
+        'headline number with something that was never in doubt.'
+        '</div>',
         unsafe_allow_html=True,
     )
 
+    r2 = st.session_state.get("result2")
+    if r2 is not None:
+        ui.hr()
+        ui.section("Resolution Across Cycles",
+                   "What became of the findings that could not be decided on day one")
+        ui.loop_table(resolution(result, r2, truth))
 
-# ---------------------------------------------------------------------------
-# Shell
-# ---------------------------------------------------------------------------
 
 def main() -> None:
     st.set_page_config(page_title="Settlement Recon", page_icon="⬗",

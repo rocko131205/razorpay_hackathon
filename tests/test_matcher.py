@@ -59,12 +59,13 @@ def test_tier4_matches_on_amount_alone_when_phone_also_absent():
     assert r.matches[0].confidence == pytest.approx(0.60)
 
 
-def test_unmatched_order_is_reported_as_phantom():
+def test_order_with_no_settled_row_is_carried_forward_not_accused():
+    """A missing row could be a phantom or a late settlement, and today's data
+    cannot tell them apart. Naming either would be a guess."""
     r = run([order()], [])
     assert not r.matches
-    assert ExceptionCode.PHANTOM_ORDER.value in codes(r)
+    assert ExceptionCode.UNRESOLVED_NO_ROW.value in codes(r)
     assert r.exceptions[0].amount_at_risk == 1000.0
-    # A phantom is never asserted as one cause; the candidates are listed.
     assert len(r.exceptions[0].possible_causes) >= 3
 
 
@@ -181,8 +182,8 @@ def test_regression_weak_tier_cannot_steal_another_orders_payment():
 
     matched = {m.order_id for m in r.matches}
     assert matched == {"ORD-0002"}
-    phantoms = [e for e in r.exceptions if e.code is ExceptionCode.PHANTOM_ORDER]
-    assert [e.order_id for e in phantoms] == ["ORD-0001"]
+    unresolved = [e for e in r.exceptions if e.code is ExceptionCode.UNRESOLVED_NO_ROW]
+    assert [e.order_id for e in unresolved] == ["ORD-0001"]
 
 
 def test_regression_contested_rows_are_not_also_counted_as_orphans():
@@ -215,9 +216,59 @@ def test_full_run_scores_against_ground_truth(tmp_path):
     )
     s = score(result, truth)
 
-    # Every planted defect type must be found, with no spurious ones.
-    assert s["overall"]["recall"] == 1.0
-    assert s["overall"]["precision"] == 1.0
-    # Matching is the genuinely hard part and is expected to be imperfect:
-    # ambiguous and phantom orders cannot be paired.
-    assert 90.0 <= result.match_rate <= 96.0
+    # Inferred checks are scored; they are good but not perfect, because the
+    # data contains genuinely ambiguous cases.
+    assert 0.90 <= s["inferred"]["overall"]["precision"] <= 1.0
+    assert 0.90 <= s["inferred"]["overall"]["recall"] <= 1.0
+
+    # Label-reading checks are counted, never scored — a check that copies
+    # Razorpay's `type` field cannot be wrong and must not inflate accuracy.
+    assert s["labelled"]["scored"] is False
+
+    # Cycle one is missing every late row by construction, so the match rate
+    # is materially lower than after the next cycle arrives.
+    assert 80.0 <= result.match_rate <= 90.0
+
+
+def test_carried_forward_findings_close_on_the_next_cycle(tmp_path):
+    """The loop Razorpay asks to be closed: undecidable today, decided
+    tomorrow, with only the genuine phantoms left standing."""
+    from recon.generator import generate
+    from recon.matcher import load_bank, load_orders, load_payments
+    from recon.metrics import resolution
+
+    truth = generate(n_orders=250, seed=7, out_dir=tmp_path)
+    orders = load_orders(tmp_path / "orders.csv")
+    c1_pay = load_payments(tmp_path / "razorpay_recon.csv")
+
+    cycle1 = reconcile(orders, c1_pay, load_bank(tmp_path / "bank_statement.csv"),
+                       settlement_utr=truth["settlement_utr"],
+                       fee_rate=truth["fee_rate"], gst_on_fee=truth["gst_on_fee"])
+
+    combined = c1_pay + load_payments(tmp_path / "razorpay_recon_cycle2.csv")
+    cycle2 = reconcile(orders, combined,
+                       load_bank(tmp_path / "bank_statement_cycle2.csv"),
+                       settlement_utr=truth["next_cycle_utr"],
+                       fee_rate=truth["fee_rate"], gst_on_fee=truth["gst_on_fee"])
+
+    res = resolution(cycle1, cycle2, truth)
+    assert res["carried_forward"] > res["still_open"]
+    assert res["closed_wrongly"] == 0        # nothing closed that was truly phantom
+    assert res["still_open"] == len(truth["true_phantoms"])
+    assert cycle2.match_rate > cycle1.match_rate
+
+
+def test_split_capture_is_distinguished_from_a_double_charge():
+    """Two rows on one order. Parts that sum to the order are a split
+    capture; parts that each equal it are a duplicate. Only arithmetic
+    separates them."""
+    split = run([order(amount=1000.0)],
+                [payment("pay_a", amount=500.0, fee=10.0, tax=1.8),
+                 payment("pay_b", amount=500.0, fee=10.0, tax=1.8)])
+    assert ExceptionCode.SPLIT_CAPTURE.value in codes(split)
+    assert ExceptionCode.DUPLICATE_SETTLEMENT.value not in codes(split)
+
+    dupe = run([order(amount=1000.0)],
+               [payment("pay_a", amount=1000.0), payment("pay_b", amount=1000.0)])
+    assert ExceptionCode.DUPLICATE_SETTLEMENT.value in codes(dupe)
+    assert ExceptionCode.SPLIT_CAPTURE.value not in codes(dupe)

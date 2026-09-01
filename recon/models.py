@@ -101,6 +101,8 @@ class ExceptionCode(str, Enum):
     PHANTOM_ORDER        = "PHANTOM_ORDER"         # shop says PAID, no payment exists
     SETTLEMENT_SHORTFALL = "SETTLEMENT_SHORTFALL"  # bundle total != bank credit
     AMBIGUOUS_MATCH      = "AMBIGUOUS_MATCH"       # several equally good candidates
+    UNRESOLVED_NO_ROW    = "UNRESOLVED_NO_ROW"     # no settled row yet; cause unknowable today
+    SPLIT_CAPTURE        = "SPLIT_CAPTURE"         # several rows that legitimately sum to the order
 
 
 # Severity drives ordering in the exception queue: money at risk first.
@@ -109,6 +111,8 @@ SEVERITY: dict[ExceptionCode, str] = {
     ExceptionCode.CHARGEBACK:           "CRITICAL",
     ExceptionCode.SETTLEMENT_SHORTFALL: "CRITICAL",
     ExceptionCode.AMBIGUOUS_MATCH:      "HIGH",
+    ExceptionCode.UNRESOLVED_NO_ROW:    "HIGH",
+    ExceptionCode.SPLIT_CAPTURE:        "LOW",
     ExceptionCode.ORPHAN_PAYMENT:       "HIGH",
     ExceptionCode.DUPLICATE_SETTLEMENT: "HIGH",
     ExceptionCode.FEE_MISMATCH:         "HIGH",
@@ -121,6 +125,28 @@ SEVERITY: dict[ExceptionCode, str] = {
 # Exceptions that typically resolve themselves on the next cycle's run.
 SELF_RESOLVING: frozenset[ExceptionCode] = frozenset({
     ExceptionCode.LATE_SETTLEMENT,
+    ExceptionCode.UNRESOLVED_NO_ROW,
+})
+
+# How a check reached its conclusion. The distinction matters when reporting
+# accuracy: a check that reads Razorpay's own `type` column cannot really be
+# wrong, so scoring it alongside checks that infer something would overstate
+# what the engine has demonstrated.
+INFERRED: frozenset[ExceptionCode] = frozenset({
+    ExceptionCode.FEE_MISMATCH,
+    ExceptionCode.AMBIGUOUS_MATCH,
+    ExceptionCode.SETTLEMENT_SHORTFALL,
+    ExceptionCode.DUPLICATE_SETTLEMENT,
+    ExceptionCode.SPLIT_CAPTURE,
+    ExceptionCode.ORPHAN_PAYMENT,
+    ExceptionCode.MISSING_RECEIPT,
+    ExceptionCode.UNRESOLVED_NO_ROW,
+})
+
+LABELLED: frozenset[ExceptionCode] = frozenset({
+    ExceptionCode.CHARGEBACK,
+    ExceptionCode.FULL_REFUND,
+    ExceptionCode.PARTIAL_REFUND,
 })
 
 

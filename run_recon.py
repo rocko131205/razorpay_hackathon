@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from recon.matcher import load_bank, load_orders, load_payments, reconcile
-from recon.metrics import score
+from recon.metrics import resolution, score
 from recon.models import SEVERITY, ExceptionCode
 
 DATA = Path("data")
@@ -68,33 +68,55 @@ def main() -> None:
         sev = SEVERITY[ExceptionCode(code)]
         print(f"      {sev:<9} {code:<22} {counts[code]:>4}")
 
-    # ── Accuracy against the answer key ───────────────────────────────────
+    # ── Accuracy, split by how each conclusion was reached ───────────────
     s = score(result, truth)
-    o = s["overall"]
     print()
     print(_rule())
-    print("  ACCURACY vs GROUND TRUTH")
+    print("  ACCURACY")
     print(_rule())
-    print(f"  precision {o['precision']:.3f}   recall {o['recall']:.3f}   f1 {o['f1']:.3f}")
-    print(f"  {o['tp']} correct  ·  {o['fp']} false alarms  ·  {o['fn']} missed")
-    print()
-    print(f"  {'exception type':<24}{'planted':>8}{'found':>7}{'prec':>7}{'recall':>8}")
-    for code, m in sorted(s["per_type"].items()):
-        print(f"  {code:<24}{m['planted']:>8}{m['raised']:>7}"
-              f"{m['precision']:>7.2f}{m['recall']:>8.2f}")
 
-    # ── The honest part: what it got wrong ────────────────────────────────
-    misses = {c: m for c, m in s["per_type"].items() if m["fn"] or m["fp"]}
-    if misses:
+    m = s["matching"]
+    print(f"  MATCHING — the hard part")
+    print(f"      match rate {m['match_rate']:.1f}%   "
+          f"({m['matched']}/{m['orders']}, {m['unmatched']} escalated)")
+
+    inf = s["inferred"]["overall"]
+    print()
+    print(f"  INFERRED — the engine worked these out")
+    print(f"      precision {inf['precision']:.3f}   recall {inf['recall']:.3f}   "
+          f"({inf['fp']} false alarms, {inf['fn']} missed)")
+    for code, x in sorted(s["inferred"]["per_type"].items()):
+        print(f"      {code:<24}{x['planted']:>5} planted{x['raised']:>6} found"
+              f"{x['precision']:>7.2f}{x['recall']:>7.2f}")
+
+    print()
+    print(f"  READ FROM RAZORPAY'S `type` COLUMN — reported, not inferred")
+    for code, x in sorted(s["labelled"]["per_type"].items()):
+        print(f"      {code:<24}{x['raised']:>5} of {x['planted']} reported as labelled")
+    print("      (not scored: a check that copies a field cannot be wrong)")
+
+    # ── The loop: run the next cycle and see what closes itself ──────────
+    nxt = DATA / "razorpay_recon_cycle2.csv"
+    if nxt.exists():
+        combined = load_payments(DATA / "razorpay_recon.csv") + load_payments(nxt)
+        bank2_path = DATA / "bank_statement_cycle2.csv"
+        bank2 = load_bank(bank2_path if bank2_path.exists() else DATA / "bank_statement.csv")
+        cycle2 = reconcile(
+            load_orders(DATA / "orders.csv"), combined, bank2,
+            settlement_utr=truth["next_cycle_utr"],
+            fee_rate=truth["fee_rate"], gst_on_fee=truth["gst_on_fee"],
+        )
+        res = resolution(result, cycle2, truth)
         print()
         print(_rule())
-        print("  WHAT THIS ENGINE STILL GETS WRONG")
+        print("  CLOSING THE LOOP — running the next cycle")
         print(_rule())
-        for code, m in sorted(misses.items()):
-            if m["fn"]:
-                print(f"  {code}: missed {m['fn']} — e.g. {', '.join(m['missed'][:3])}")
-            if m["fp"]:
-                print(f"  {code}: {m['fp']} false alarms — e.g. {', '.join(str(x) for x in m['spurious'][:3])}")
+        print(f"  carried forward from cycle 1   {res['carried_forward']:>4}")
+        print(f"  closed once the rows arrived   {res['closed_next_cycle']:>4}"
+              f"   ({res['closed_correctly']} correctly, {res['closed_wrongly']} wrongly)")
+        print(f"  still open after cycle 2       {res['still_open']:>4}"
+              f"   ({res['remaining_are_real_phantoms']} are genuine phantoms)")
+        print(f"  cycle 2 match rate             {cycle2.match_rate:>7.1f}%")
 
     # ── A few exceptions in full ──────────────────────────────────────────
     print()

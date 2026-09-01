@@ -8,6 +8,13 @@ The answer key is the point. Without it the engine can only claim accuracy;
 with it, accuracy can be measured. Every defect below is injected at a known
 order id, so metrics.py can score the matcher honestly.
 
+Two cycles are emitted, because one is not enough to be honest. A payment
+that settles late is simply *absent* from today's report — tomorrow's report
+does not exist yet — so an order with no settled row could equally be a
+phantom (payment failed, goods shipped) or a late settlement. Nothing in
+today's data separates them. Cycle two supplies the rows that were missing,
+and the exceptions that were carried forward close on their own.
+
 Shape of the report mirrors Razorpay's settlement recon combined report:
 payment_id, order_receipt, type, amount, fee, tax, settled_at,
 settlement_utr, method.
@@ -39,6 +46,7 @@ DEFECT_MIX: dict[ExceptionCode, int] = {
     ExceptionCode.ORPHAN_PAYMENT:        4,
     ExceptionCode.PHANTOM_ORDER:         5,
     ExceptionCode.AMBIGUOUS_MATCH:      12,   # 6 colliding pairs
+    ExceptionCode.SPLIT_CAPTURE:         6,   # legitimate part-captures
 }
 
 # Realism knobs. These are not defects the engine should report — they are
@@ -181,6 +189,13 @@ def generate(
         elif defect is ExceptionCode.CHARGEBACK:
             ptype = "chargeback"
 
+        elif defect is ExceptionCode.SPLIT_CAPTURE:
+            # Half now, half in a second row. Superficially identical to a
+            # duplicate — the difference is that the parts sum to the order
+            # rather than each equalling it, which the engine must work out.
+            pay_amount = _money(amount / 2)
+            fee, tax = _fee_for(pay_amount)
+
         # Razorpay does not always capture a contact against the payment.
         # Where it is absent, Tier 3 cannot fire and the match degrades.
         row_phone = phone
@@ -209,6 +224,11 @@ def generate(
             "customer_phone": row_phone,
         })
 
+        if defect is ExceptionCode.SPLIT_CAPTURE:
+            half = dict(payments[-1])
+            half["payment_id"] = f"pay_{rng.randrange(16**14):014x}"
+            payments.append(half)
+
         if defect is ExceptionCode.DUPLICATE_SETTLEMENT:
             # Same payment appears twice in the report — double-counted money.
             dup = dict(payments[-1])
@@ -224,6 +244,7 @@ def generate(
                 ExceptionCode.DUPLICATE_SETTLEMENT: amount,
                 ExceptionCode.LATE_SETTLEMENT: amount,
                 ExceptionCode.AMBIGUOUS_MATCH: amount,
+                ExceptionCode.SPLIT_CAPTURE: 0.0,
             }.get(defect, 0.0)
             truth.append({"order_id": oid, "defect": defect.value,
                           "amount_at_risk": _money(at_risk)})
@@ -249,7 +270,12 @@ def generate(
                       "defect": ExceptionCode.ORPHAN_PAYMENT.value,
                       "amount_at_risk": amount})
 
-    rng.shuffle(payments)
+    # A late row is not in today's report at all. Holding it back is what
+    # makes phantom and late genuinely indistinguishable on cycle one.
+    cycle1 = [p for p in payments if p["settlement_utr"] == utr_today]
+    cycle2 = [p for p in payments if p["settlement_utr"] == utr_next]
+    rng.shuffle(cycle1)
+    rng.shuffle(cycle2)
 
     # ── Bank statement: one credit per settlement, net of everything ──────
     def _net(rows: list[dict]) -> float:
@@ -259,17 +285,20 @@ def generate(
             total += gross - r["fee"] - r["tax"]
         return _money(total)
 
-    today_rows = [p for p in payments if p["settlement_utr"] == utr_today]
-    next_rows = [p for p in payments if p["settlement_utr"] == utr_next]
+    today_rows, next_rows = cycle1, cycle2
 
+    # The bank statement is split the same way as the report. Tomorrow's
+    # credit has not landed today, so including it would invent a shortfall
+    # against rows that do not exist yet.
     bank = [{
         "date": (base + timedelta(days=1)).date().isoformat(),
         "utr": utr_today,
         "credit": _net(today_rows),
         "description": f"RAZORPAY SETTLEMENT {settlement_id}",
     }]
+    bank2 = list(bank)
     if next_rows:
-        bank.append({
+        bank2.append({
             "date": (base + timedelta(days=2)).date().isoformat(),
             "utr": utr_next,
             "credit": _net(next_rows),
@@ -285,8 +314,12 @@ def generate(
             writer.writerows(rows)
 
     _write("orders.csv", orders)
-    _write("razorpay_recon.csv", payments)
+    _write("razorpay_recon.csv", cycle1)
+    if cycle2:
+        _write("razorpay_recon_cycle2.csv", cycle2)
     _write("bank_statement.csv", bank)
+    if len(bank2) > len(bank):
+        _write("bank_statement_cycle2.csv", bank2)
 
     ground_truth = {
         "settlement_date": settlement_date,
@@ -294,6 +327,16 @@ def generate(
         "next_cycle_utr": utr_next,
         "n_orders": len(orders),
         "n_payments": len(payments),
+        "n_cycle1": len(cycle1),
+        "n_cycle2": len(cycle2),
+        # Orders that cannot be resolved on cycle one and are expected to
+        # close on cycle two once the missing rows arrive.
+        "resolves_on_cycle2": sorted(
+            o for o, c in assigned.items() if c is ExceptionCode.LATE_SETTLEMENT
+        ),
+        "true_phantoms": sorted(
+            o for o, c in assigned.items() if c is ExceptionCode.PHANTOM_ORDER
+        ),
         "fee_rate": FEE_RATE,
         "gst_on_fee": GST_ON_FEE,
         "defects": truth,

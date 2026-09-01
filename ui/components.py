@@ -163,21 +163,62 @@ def audit_row(m: Match) -> None:
     )
 
 
-def metrics_table(per_type: dict) -> None:
+def inferred_table(per_type: dict) -> None:
+    """Checks that reach a conclusion the data does not state outright."""
     rows = []
     for code, m in sorted(per_type.items()):
-        miss_cls = "miss" if m["fn"] else "ok"
         rows.append(
             f'<tr><td>{html.escape(code)}</td>'
             f'<td>{m["planted"]}</td><td>{m["raised"]}</td>'
             f'<td>{m["precision"]:.2f}</td><td>{m["recall"]:.2f}</td>'
-            f'<td class="{miss_cls}">{m["fn"]}</td></tr>'
+            f'<td class="{"miss" if m["fp"] else "ok"}">{m["fp"]}</td>'
+            f'<td class="{"miss" if m["fn"] else "ok"}">{m["fn"]}</td></tr>'
         )
     st.markdown(
         '<table class="rc-mtable"><thead><tr>'
-        '<th>Exception type</th><th>Planted</th><th>Found</th>'
-        '<th>Precision</th><th>Recall</th><th>Missed</th>'
+        '<th>Check</th><th>Planted</th><th>Found</th>'
+        '<th>Precision</th><th>Recall</th><th>False alarms</th><th>Missed</th>'
         '</tr></thead><tbody>' + "".join(rows) + '</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+def labelled_table(per_type: dict) -> None:
+    """Checks that report a field Razorpay already populated.
+
+    Deliberately shown without precision or recall. Scoring a check that
+    copies `type` would claim credit for reading a column.
+    """
+    rows = "".join(
+        f'<tr><td>{html.escape(code)}</td><td>{m["raised"]} of {m["planted"]}</td>'
+        f'<td style="color:var(--c-text3);">read from <code>type</code></td></tr>'
+        for code, m in sorted(per_type.items())
+    )
+    st.markdown(
+        '<table class="rc-mtable"><thead><tr>'
+        '<th>Check</th><th>Reported</th><th>Source</th>'
+        '</tr></thead><tbody>' + rows + '</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+
+def loop_table(res: dict) -> None:
+    """Findings that could not be decided today, and what became of them."""
+    rows = [
+        ("Carried forward from cycle 1", res["carried_forward"], ""),
+        ("Closed once the next cycle's rows arrived", res["closed_next_cycle"],
+         f'{res["closed_correctly"]} correctly · {res["closed_wrongly"]} wrongly'),
+        ("Still open after cycle 2", res["still_open"],
+         f'{res["remaining_are_real_phantoms"]} are genuine phantoms'),
+    ]
+    body = "".join(
+        f'<tr><td>{html.escape(label)}</td><td>{n}</td>'
+        f'<td style="color:var(--c-text3);">{html.escape(note)}</td></tr>'
+        for label, n, note in rows
+    )
+    st.markdown(
+        '<table class="rc-mtable"><thead><tr><th>Stage</th><th>Orders</th>'
+        '<th></th></tr></thead><tbody>' + body + '</tbody></table>',
         unsafe_allow_html=True,
     )
 

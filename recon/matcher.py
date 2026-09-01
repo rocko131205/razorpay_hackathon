@@ -247,21 +247,25 @@ def reconcile(
             continue
 
         if payment is None:
-            # Shop believes it was paid; Razorpay has no such payment. The
-            # engine cannot tell which cause applies, so it lists them.
+            # No settled row exists for this order *today*. Whether that is a
+            # phantom or merely a late settlement is not knowable from this
+            # cycle alone: tomorrow's report does not exist yet. Naming one
+            # cause would be a guess, so the finding is carried forward and
+            # the next cycle decides it.
             result.exceptions.append(Exception_.build(
-                ExceptionCode.PHANTOM_ORDER,
+                ExceptionCode.UNRESOLVED_NO_ROW,
                 order_id=order.order_id,
                 amount_at_risk=order.amount,
                 detail=(f"Order {order.order_id} is marked {order.status} for "
-                        f"₹{order.amount:,.2f} but no matching payment exists "
-                        f"in this settlement."),
+                        f"₹{order.amount:,.2f}, but no settled row matches it in "
+                        f"this cycle. Carried forward — the next cycle will "
+                        f"resolve or confirm it."),
                 possible_causes=[
-                    "Payment settles in a later cycle",
-                    "Razorpay placed the payment on hold for risk review",
-                    "Order was refunded and the shop's system was not updated",
-                    "Payment actually failed and the shop wrongly marked it paid "
-                    "— goods may have shipped without payment",
+                    "Settles in a later cycle and is simply not in today's report",
+                    "Razorpay is holding the payment for risk review",
+                    "Refunded without the shop's system being updated",
+                    "Payment failed and was wrongly marked paid — goods may have "
+                    "shipped without payment",
                 ],
                 evidence={"order": order.__dict__, "rule_attempted": rule},
             ))
@@ -358,18 +362,42 @@ def reconcile(
             seen_receipts[p.order_receipt] += 1
 
     order_ids = known_order_ids
+    order_amounts = {o.order_id: o.amount for o in orders}
     for p in payments:
         if p.payment_id in consumed or p.payment_id in contested:
             continue
         if p.order_receipt and p.order_receipt in order_ids and seen_receipts[p.order_receipt] > 1:
-            result.exceptions.append(Exception_.build(
-                ExceptionCode.DUPLICATE_SETTLEMENT,
-                order_id=p.order_receipt, payment_id=p.payment_id,
-                amount_at_risk=p.amount,
-                detail=(f"A second settlement row exists for {p.order_receipt}. "
-                        f"₹{p.amount:,.2f} may have been counted twice."),
-                evidence={"payment_id": p.payment_id, "amount": p.amount},
-            ))
+            # Two rows against one order look identical at a glance. They are
+            # told apart by arithmetic: parts that SUM to the order value are a
+            # legitimate split capture, parts that each EQUAL it are a double
+            # charge. Nothing in the data says which — it has to be worked out.
+            siblings = [q for q in payments
+                        if q.order_receipt == p.order_receipt and q.type == "payment"]
+            total = round(sum(q.amount for q in siblings), 2)
+            expected = round(order_amounts.get(p.order_receipt, 0.0), 2)
+
+            if expected and abs(total - expected) <= AMOUNT_TOLERANCE:
+                result.exceptions.append(Exception_.build(
+                    ExceptionCode.SPLIT_CAPTURE,
+                    order_id=p.order_receipt, payment_id=p.payment_id,
+                    amount_at_risk=0.0,
+                    detail=(f"{len(siblings)} rows against {p.order_receipt} sum to "
+                            f"₹{total:,.2f}, matching the order value. A part "
+                            f"capture, not a double charge — no money at risk."),
+                    evidence={"parts": [q.amount for q in siblings],
+                              "order_amount": expected, "sum": total},
+                ))
+            else:
+                result.exceptions.append(Exception_.build(
+                    ExceptionCode.DUPLICATE_SETTLEMENT,
+                    order_id=p.order_receipt, payment_id=p.payment_id,
+                    amount_at_risk=p.amount,
+                    detail=(f"{len(siblings)} rows against {p.order_receipt} total "
+                            f"₹{total:,.2f} against an order of ₹{expected:,.2f}. "
+                            f"₹{p.amount:,.2f} looks to have been taken twice."),
+                    evidence={"parts": [q.amount for q in siblings],
+                              "order_amount": expected, "sum": total},
+                ))
         else:
             result.exceptions.append(Exception_.build(
                 ExceptionCode.ORPHAN_PAYMENT,

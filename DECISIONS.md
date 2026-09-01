@@ -59,3 +59,35 @@ row is paired, classification is deterministic — Razorpay labels the row type,
 and the fee threshold is arithmetic. Reporting a lower figure there would be
 false modesty, not honesty. The rounding-drift rows in the generator exist
 specifically to prove the fee threshold does not fire on noise.
+
+## Why the Q&A agent cannot calculate
+
+The controller's real question is "why is Thursday's payout short", which is a
+retrieval problem, not a reasoning one. Python selects the relevant ledger rows
+before the model is called, and the system prompt forbids arithmetic — every
+figure the model may quote is already computed and handed to it. The dashboard
+shows the exact context it was given, so any answer can be checked against the
+audit trail.
+
+This is the same division the matcher keeps. If the model could compute, the
+match rate would stop being reproducible, and a match rate that is not
+reproducible is not a metric.
+
+## Why credentials are optional
+
+Both integrations degrade rather than fail. Without Razorpay keys the engine
+runs on synthetic data; without an Anthropic key the same question is answered
+straight from the ledger. A demo that depends on a network is a demo that can
+fail in front of the person evaluating it.
+
+The live model path is written against the documented SDK but was never
+exercised — no API key was available while building. The fallback is what is
+tested, and it is what runs by default. Stated in the README rather than left
+for someone to discover.
+
+## Streamlit widget state
+
+A keyed `text_input` ignores a new `value` once the widget exists, so the
+example-question buttons write into `st.session_state["q_input"]` and rerun
+instead. Streamlit also paints `stNumberInputContainer` white regardless of
+theme, which had to be named explicitly in the stylesheet.

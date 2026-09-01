@@ -12,6 +12,7 @@ and the audit trail cannot disagree.
 """
 from __future__ import annotations
 
+import html
 import json
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import streamlit as st
 from recon.matcher import load_bank, load_orders, load_payments, reconcile
 from recon.metrics import resolution, score
 from recon.models import SEVERITY, ExceptionCode
+from recon import qa_agent, razorpay_client
 from ui import components as ui
 
 DATA = Path("data")
@@ -277,6 +279,76 @@ def page_accuracy(truth: dict) -> None:
         ui.loop_table(resolution(result, r2, truth))
 
 
+def page_ask() -> None:
+    result = st.session_state.get("result")
+    ui.section("Ask the Ledger",
+               "Questions answered only from what this reconciliation established")
+    if result is None:
+        st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
+                    '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
+        return
+
+    live = qa_agent.available()
+    model_state = ("<b style='color:var(--c-green);'>connected</b>" if live
+                   else "not configured — answers come straight from the ledger")
+    st.markdown(
+        f'<div style="font-size:11px;color:var(--c-text2);line-height:1.8;'
+        f'border-left:2px solid var(--c-accent);padding-left:12px;">'
+        f'Python selects the relevant ledger rows before the model sees anything, '
+        f'and the model is forbidden from calculating — every figure it can quote '
+        f'is already computed. That is what keeps an answer checkable against the '
+        f'audit trail.<br>'
+        f'<span style="color:var(--c-text3);">Model: {model_state}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    st.write("")
+    examples = [
+        "Why is the payout short this cycle?",
+        "What happened to ORD-0009?",
+        "Which exceptions need a human first?",
+        "How much am I being overcharged in fees?",
+    ]
+    for col, ex in zip(st.columns(len(examples)), examples):
+        if col.button(ex, use_container_width=True, key=f"ex_{abs(hash(ex))}"):
+            # A keyed widget ignores a new `value` once it exists, so the
+            # example has to be written into its state and the script rerun.
+            st.session_state["q_input"] = ex
+            st.rerun()
+
+    question = st.text_input(
+        "Question",
+        placeholder="e.g. why was Tuesday's payout short?",
+        label_visibility="collapsed", key="q_input",
+    )
+    if st.button("ASK", key="ask_btn") and question.strip():
+        with st.spinner("Reading the match ledger…"):
+            st.session_state["answer"] = qa_agent.ask(result, question.strip())
+        st.session_state["asked"] = question.strip()
+
+    answer = st.session_state.get("answer")
+    if answer is None:
+        return
+
+    ui.hr()
+    st.markdown(
+        f'<div style="font-size:10px;color:var(--c-text3);letter-spacing:0.1em;'
+        f'margin-bottom:8px;">ANSWER · {answer.rows_used} LEDGER ROWS CONSULTED'
+        f'{" · " + answer.model if answer.model else ""}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="rc-exc" style="border-left-color:var(--c-accent);">'
+        f'<div class="rc-exc-detail" style="white-space:pre-wrap;">'
+        f'{html.escape(answer.text)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("What the model was allowed to see"):
+        context, _ = qa_agent.select_context(result, st.session_state.get("asked", ""))
+        st.code("\n".join(context), language="text")
+
+
 def main() -> None:
     st.set_page_config(page_title="Settlement Recon", page_icon="⬗",
                        layout="wide", initial_sidebar_state="expanded")
@@ -293,7 +365,7 @@ def main() -> None:
             '</div>', unsafe_allow_html=True)
 
         page = st.radio("Navigation",
-                        ["Run", "Exceptions", "Audit Trail", "Accuracy"],
+                        ["Run", "Exceptions", "Audit Trail", "Accuracy", "Ask"],
                         label_visibility="collapsed")
 
         st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
@@ -312,9 +384,17 @@ def main() -> None:
         # completed run rather than lagging a rerun behind it.
         result = st.session_state.get("result")
         st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
+        rzp = razorpay_client.available()
+        llm = qa_agent.available()
         st.markdown(
             f'<div style="font-size:9px;color:var(--c-text3);line-height:2;'
             f'letter-spacing:0.06em;">'
+            f'RAZORPAY&nbsp;<span style="color:'
+            f'{"var(--c-green)" if rzp else "var(--c-text3)"};">'
+            f'{"■ TEST MODE" if rzp else "□ SYNTHETIC"}</span><br>'
+            f'MODEL&nbsp;&nbsp;&nbsp;&nbsp;<span style="color:'
+            f'{"var(--c-green)" if llm else "var(--c-text3)"};">'
+            f'{"■ CONNECTED" if llm else "□ LEDGER ONLY"}</span><br>'
             f'ENGINE&nbsp;&nbsp;<span style="color:var(--c-green);">■ DETERMINISTIC</span><br>'
             f'RESULT&nbsp;&nbsp;<span style="color:'
             f'{"var(--c-green)" if result else "var(--c-text3)"};">'
@@ -332,8 +412,10 @@ def main() -> None:
         page_exceptions()
     elif page == "Audit Trail":
         page_audit()
-    else:
+    elif page == "Accuracy":
         page_accuracy(truth)
+    else:
+        page_ask()
 
 
 if __name__ == "__main__":

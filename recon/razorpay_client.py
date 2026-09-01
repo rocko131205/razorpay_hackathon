@@ -16,6 +16,7 @@ synthetic data. That is deliberate — the demo must not depend on a network.
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Iterable, Optional
@@ -163,20 +164,30 @@ def create_order(amount_rupees: float, receipt: str,
         raise RazorpayError(
             "Refusing to create orders with a live key. Use a rzp_test_ key pair."
         )
-    resp = requests.post(
-        f"{API_ROOT}/orders",
-        auth=(creds.key_id, creds.key_secret),
-        json={
-            "amount": int(round(amount_rupees * 100)),
-            "currency": "INR",
-            "receipt": receipt,
-            "notes": {"source": "settlement-recon demo"},
-        },
-        timeout=TIMEOUT,
+    payload = {
+        "amount": int(round(amount_rupees * 100)),
+        "currency": "INR",
+        "receipt": receipt,
+        "notes": {"source": "settlement-recon demo", "receipt": receipt},
+    }
+    # Test mode throttles writes hard, so back off rather than giving up: a
+    # seeding helper that fails halfway leaves a confusing partial account.
+    delay = 1.0
+    for attempt in range(5):
+        resp = requests.post(f"{API_ROOT}/orders",
+                             auth=(creds.key_id, creds.key_secret),
+                             json=payload, timeout=TIMEOUT)
+        if resp.ok:
+            return resp.json()
+        if resp.status_code != 429:
+            raise RazorpayError(
+                f"Order creation failed ({resp.status_code}): {resp.text[:200]}")
+        time.sleep(delay)
+        delay *= 2
+    raise RazorpayError(
+        "Razorpay kept returning 429 (rate limited) after 5 attempts. "
+        "Wait a minute and seed again."
     )
-    if not resp.ok:
-        raise RazorpayError(f"Order creation failed ({resp.status_code}): {resp.text[:200]}")
-    return resp.json()
 
 
 # ---------------------------------------------------------------------------
@@ -299,4 +310,5 @@ def seed(n: int = 12, creds: Optional[Credentials] = None) -> list[dict]:
     for i in range(1, n + 1):
         amount = 199.0 + (i * 137) % 4200
         created.append(create_order(amount, f"ORD-{9000 + i}", creds))
+        time.sleep(0.7)   # stay under the test-mode write limit
     return created

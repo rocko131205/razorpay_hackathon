@@ -128,14 +128,21 @@ def page_run(truth: dict) -> None:
 
     result = st.session_state.get("result")
     if result is not None and st.session_state.get("source") == "live":
+        live = st.session_state.get("live")
         ui.hr()
-        ui.hero(result)
-        st.write("")
-        ui.stat_tiles(result)
-        ui.hr()
-        ui.section("Evidence Behind the Match Rate",
-                   "Which rule paired each order — strong keys first, weak ones flagged")
-        ui.tier_breakdown(result)
+        # A match rate is only meaningful once something has settled. Before
+        # that, reporting 0% would read as a failure when the true state is
+        # simply that no payout has run yet.
+        if live is not None and not live.settled and not live.payments:
+            ui.pending_hero(result, len(live.orders))
+        else:
+            ui.hero(result)
+            st.write("")
+            ui.stat_tiles(result)
+            ui.hr()
+            ui.section("Evidence Behind the Match Rate",
+                       "Which rule paired each order — strong keys first, weak ones flagged")
+            ui.tier_breakdown(result)
         return
     if result is None:
         st.markdown(

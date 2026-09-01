@@ -104,3 +104,30 @@ If the grounding lived in the prompt — "please only use the data below" — th
 provider would matter a great deal, because the guarantee would rest on the
 model's compliance. It does not; it rests on the model never being given the
 raw rows in the first place.
+
+## What the live Razorpay path actually showed
+
+Verified against a real test account. All three endpoints authenticate, and all
+three return zero rows on a fresh account — which is why the fallback exists.
+After seeding, `/v1/orders` returns real orders and the engine reports all 19 as
+awaiting settlement. That is the correct answer, not a failure.
+
+Two things surfaced only by running it:
+
+**Test mode rate-limits writes.** Creating twelve orders in a loop returned 429
+partway through, leaving a half-seeded account. The seeder now paces itself and
+retries with backoff.
+
+**A zero match rate read as a failure.** With nothing settled there is nothing
+to match, so the live view reports a count of orders awaiting settlement rather
+than 0%. A metric that cannot yet be computed should not be displayed as a bad
+score.
+
+## Gemini 2.5 spends output budget on reasoning
+
+The first live answer stopped mid-list. `maxOutputTokens: 2048` was being
+consumed partly by the model's own reasoning, so the visible answer truncated
+rather than erroring. Raised to 8192.
+
+Model discovery also earned its keep: `ListModels` resolved `gemini-2.5-flash`,
+where the hardcoded default would have named an older model.

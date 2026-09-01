@@ -88,6 +88,32 @@ def hero(result: ReconResult) -> None:
     )
 
 
+def pending_hero(result: ReconResult, n_orders: int) -> None:
+    """Live account with no payout history yet.
+
+    Every order is awaiting settlement, which is a legitimate finance-ops state
+    and not a reconciliation failure — so it is reported as a count rather than
+    as a match rate of zero.
+    """
+    st.markdown(
+        f'<div class="rc-hero">'
+        f'  <div><div class="rc-hero-num">{n_orders}</div></div>'
+        f'  <div>'
+        f'    <div class="rc-hero-lbl">Orders awaiting settlement</div>'
+        f'    <div class="rc-hero-det">'
+        f'      Read live from Razorpay. Nothing has been paid out against them yet, '
+        f'      so there is no settled row to match and no match rate to report.'
+        f'    </div>'
+        f'    <div class="rc-hero-det" style="margin-top:4px;color:var(--c-text3);">'
+        f'      ₹{result.amount_at_risk:,.2f} outstanding &nbsp;·&nbsp; every order '
+        f'carried forward to the next cycle'
+        f'    </div>'
+        f'  </div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def stat_tiles(result: ReconResult) -> None:
     crit = sum(1 for e in result.exceptions if e.severity == "CRITICAL")
     auto = sum(1 for e in result.exceptions if e.severity == "LOW")

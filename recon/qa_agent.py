@@ -220,7 +220,9 @@ def _ask_gemini(facts: str, question: str) -> str:
             "contents": [{"role": "user", "parts": [{
                 "text": f"Reconciliation facts:\n\n{facts}\n\nQuestion: {question}"
             }]}],
-            "generationConfig": {"temperature": 0, "maxOutputTokens": 2048},
+            # Gemini 2.5 spends part of the output budget on reasoning, so a
+            # small cap truncates the answer mid-sentence rather than erroring.
+            "generationConfig": {"temperature": 0, "maxOutputTokens": 8192},
         },
         timeout=60,
     )

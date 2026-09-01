@@ -27,6 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
+from .config import ensure_loaded
 from .models import ExceptionCode, ReconResult
 
 MODEL = "claude-opus-5"
@@ -153,6 +154,7 @@ def _deterministic_answer(result: ReconResult, question: str,
 # ---------------------------------------------------------------------------
 
 def available() -> bool:
+    ensure_loaded()
     return bool(os.getenv("ANTHROPIC_API_KEY", "").strip())
 
 

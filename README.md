@@ -150,12 +150,26 @@ python run_recon.py --orders 5000    # scales: 5,000 orders in ~18 ms
 ### Optional credentials
 
 ```bash
-export RAZORPAY_KEY_ID=rzp_test_xxx        # live settlement data
-export RAZORPAY_KEY_SECRET=xxx
-export ANTHROPIC_API_KEY=sk-ant-xxx        # settlement Q&A
+cp .env.example .env      # then paste your keys into it
 ```
 
-Both are optional and the sidebar shows which are active. Absent either, the app falls back and says so on screen rather than failing.
+```
+RAZORPAY_KEY_ID=rzp_test_xxx       # Dashboard -> Test Mode -> Account & Settings -> API Keys
+RAZORPAY_KEY_SECRET=xxx
+ANTHROPIC_API_KEY=sk-ant-xxx       # console.anthropic.com -> API Keys
+```
+
+Exported shell variables take precedence over the file. Both are optional and the sidebar shows which are active — absent either, the app falls back and says so on screen rather than failing.
+
+With Razorpay keys the sidebar offers a **Live Razorpay** source. Because a new test account has no payout history, the client reads the best source it can and names which one it used:
+
+| Tried | Present on a new test account |
+|---|---|
+| `/v1/settlements/recon/combined` | No — nothing has been paid out |
+| `/v1/payments` | Only once someone has been through checkout |
+| `/v1/orders` | Yes — these are the ones you created |
+
+Falling back to payments means no UTR and no fee breakdown exist yet, so the bank stage is skipped and only order-to-payment matching runs. Falling back to orders alone still says something true: these exist and nothing has settled against them. **Seed 12 test orders** in the sidebar creates real orders carrying `receipt: ORD-90xx`.
 
 ## Asking the ledger
 

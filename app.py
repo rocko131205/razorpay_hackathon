@@ -38,6 +38,23 @@ def ensure_data(n_orders: int, seed: int) -> dict:
     return json.loads((DATA / "ground_truth.json").read_text(encoding="utf-8"))
 
 
+def run_live(truth: dict):
+    """Reconcile against whatever this Razorpay account actually holds.
+
+    The engine is unchanged — live rows arrive in the same shapes the generator
+    produces, so nothing downstream knows or cares where they came from.
+    """
+    from datetime import date
+    today = date.today()
+    live = razorpay_client.fetch_live(today.year, today.month)
+    result = reconcile(
+        live.orders, live.payments, [],          # no bank file for live data
+        settlement_utr=(live.payments[0].settlement_utr if live.payments else ""),
+        fee_rate=truth["fee_rate"], gst_on_fee=truth["gst_on_fee"],
+    )
+    return result, live
+
+
 def run_cycle(truth: dict, cycle: int = 1):
     """Reconcile one cycle.
 
@@ -84,6 +101,51 @@ def page_run(truth: dict) -> None:
         unsafe_allow_html=True,
     )
 
+    if st.session_state.get("source") == "live":
+        if st.button("▶  RECONCILE LIVE RAZORPAY DATA", key="run_live_btn"):
+            try:
+                with st.spinner("Reading from Razorpay test mode…"):
+                    result, live = run_live(truth)
+                st.session_state["result"] = result
+                st.session_state["live"] = live
+                st.session_state.pop("result2", None)
+            except razorpay_client.RazorpayError as exc:
+                st.error(str(exc))
+
+        live = st.session_state.get("live")
+        if live is not None:
+            st.markdown(
+                f'<div style="margin:12px 0;font-size:11px;color:var(--c-text2);'
+                f'border-left:2px solid var(--c-green);padding-left:12px;line-height:1.7;">'
+                f'<b style="color:var(--c-green);">Live · {html.escape(live.source)}</b><br>'
+                f'{len(live.orders)} orders and {len(live.payments)} payment rows read '
+                f'from Razorpay test mode.<br>'
+                f'<span style="color:var(--c-text3);">{html.escape(live.note)}</span></div>',
+                unsafe_allow_html=True,
+            )
+    else:
+        _run_buttons(truth)
+
+    result = st.session_state.get("result")
+    if result is not None and st.session_state.get("source") == "live":
+        ui.hr()
+        ui.hero(result)
+        st.write("")
+        ui.stat_tiles(result)
+        ui.hr()
+        ui.section("Evidence Behind the Match Rate",
+                   "Which rule paired each order — strong keys first, weak ones flagged")
+        ui.tier_breakdown(result)
+        return
+    if result is None:
+        st.markdown(
+            '<div style="color:var(--c-text3);font-size:11px;margin-top:14px;">'
+            '▸ Awaiting run…</div>', unsafe_allow_html=True)
+        return
+    _render_synthetic_run(truth, result)
+
+
+def _run_buttons(truth: dict) -> None:
     c1, c2, _ = st.columns([1, 1, 2])
     if c1.button("▶  RUN CYCLE 1", key="run_btn", use_container_width=True):
         st.session_state["result"] = run_cycle(truth, cycle=1)
@@ -95,13 +157,8 @@ def page_run(truth: dict) -> None:
         st.session_state["result2"] = run_cycle(truth, cycle=2)
         st.session_state["cycle"] = 2
 
-    result = st.session_state.get("result")
-    if result is None:
-        st.markdown(
-            '<div style="color:var(--c-text3);font-size:11px;margin-top:14px;">'
-            '▸ Awaiting run…</div>', unsafe_allow_html=True)
-        return
 
+def _render_synthetic_run(truth: dict, result) -> None:
     ui.hr()
     ui.hero(result)
     st.write("")
@@ -116,17 +173,19 @@ def page_run(truth: dict) -> None:
     if unmatched:
         ambiguous = sum(1 for e in result.exceptions
                         if e.code is ExceptionCode.AMBIGUOUS_MATCH)
-        phantom = sum(1 for e in result.exceptions
-                      if e.code is ExceptionCode.PHANTOM_ORDER)
+        pending = sum(1 for e in result.exceptions
+                      if e.code is ExceptionCode.UNRESOLVED_NO_ROW)
         st.markdown(
             f'<div style="margin-top:14px;font-size:11px;color:var(--c-text2);'
             f'border-left:2px solid var(--c-red);padding-left:12px;line-height:1.7;">'
             f'<b style="color:var(--c-red);">{unmatched} orders were not matched.</b><br>'
             f'{ambiguous} are ambiguous — several settled rows are equally consistent '
-            f'with them, and nothing in the data separates the candidates. '
-            f'{phantom} have no corresponding settled row at all.<br>'
-            f'<span style="color:var(--c-text3);">The engine escalates both rather '
-            f'than guessing: a wrong pairing corrupts two rows, not one.</span>'
+            f'with them, and nothing separates the candidates. '
+            f'{pending} have no settled row in this cycle at all, which today is '
+            f'equally consistent with a late settlement and with a payment that '
+            f'never happened.<br>'
+            f'<span style="color:var(--c-text3);">Both are escalated rather than '
+            f'guessed. Run the next cycle to see which resolve.</span>'
             f'</div>',
             unsafe_allow_html=True,
         )
@@ -371,7 +430,31 @@ def main() -> None:
         st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
         st.markdown('<div style="font-size:8px;letter-spacing:0.16em;'
                     'color:var(--c-text3);text-transform:uppercase;margin-bottom:6px;">'
-                    'Dataset</div>', unsafe_allow_html=True)
+                    'Data source</div>', unsafe_allow_html=True)
+        has_keys = razorpay_client.available()
+        source = st.radio(
+            "Source", ["Synthetic", "Live Razorpay"],
+            index=0, label_visibility="collapsed",
+            disabled=not has_keys,
+            help=("Set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in .env to enable"
+                  if not has_keys else
+                  "Live reads real orders and settled rows from your test account"),
+        )
+        st.session_state["source"] = "live" if source == "Live Razorpay" else "synthetic"
+
+        if has_keys and st.session_state["source"] == "live":
+            if st.button("Seed 12 test orders", use_container_width=True):
+                try:
+                    with st.spinner("Creating orders in Razorpay test mode…"):
+                        made = razorpay_client.seed(12)
+                    st.success(f"Created {len(made)} orders.")
+                except razorpay_client.RazorpayError as exc:
+                    st.error(str(exc))
+
+        st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:8px;letter-spacing:0.16em;'
+                    'color:var(--c-text3);text-transform:uppercase;margin-bottom:6px;">'
+                    'Synthetic dataset</div>', unsafe_allow_html=True)
         n_orders = st.number_input("Orders", 50, 20000, 250, step=50)
         seed = st.number_input("Seed", 1, 9999, 7)
         if st.button("Regenerate", use_container_width=True):

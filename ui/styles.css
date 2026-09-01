@@ -1,0 +1,537 @@
+/* ============================================================
+   SETTLEMENT RECON — Reconciliation Controller
+   Precise, minimal overrides. No broad span/div resets
+   that break Streamlit's own icon rendering.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300;0,400;0,600;0,700&family=Inter:wght@400;500;600;700&display=swap');
+/* Material Symbols — needed by Streamlit expanders/sidebar */
+@import url('https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=swap');
+
+/* ── Tokens ────────────────────────────────────────────────── */
+:root {
+    --c-bg:      #0A0B0E;
+    --c-bg2:     #10121A;
+    --c-bg3:     #070809;
+    --c-border:  #1E2030;
+    --c-border2: #28293A;
+    --c-text:    #D8D8E0;
+    --c-text2:   #9A9AB0;
+    --c-text3:   #5A5A72;
+    --c-accent:  #4C8DFF;
+    --c-cyan:    #46B3A0;
+    --c-green:   #3AB87A;
+    --c-red:     #C94A3A;
+}
+
+/* ── Base — be targeted, do NOT override bare span/div ─────── */
+html, body { font-family: 'JetBrains Mono', 'SF Mono', monospace !important; }
+
+.stApp {
+    background-color: var(--c-bg) !important;
+    color: var(--c-text) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Only target Streamlit's own paragraph/markdown text */
+.stMarkdown p, .stMarkdown li, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3,
+[data-testid="stText"], [data-testid="stMarkdownContainer"] p,
+input, textarea, select, button {
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── Hide Streamlit chrome ─────────────────────────────────── */
+#MainMenu, footer, header,
+[data-testid="stToolbar"],
+[data-testid="stDecoration"],
+[data-testid="stStatusWidget"],
+[data-testid="stSidebarHeader"],
+[data-testid="stSidebarCollapseButton"],
+[data-testid="collapsedControl"] {
+    display: none !important;
+}
+
+/* ── Sidebar ───────────────────────────────────────────────── */
+[data-testid="stSidebar"] {
+    background-color: var(--c-bg3) !important;
+    border-right: 1px solid var(--c-border) !important;
+}
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] label,
+[data-testid="stSidebar"] input,
+[data-testid="stSidebar"] button {
+    font-family: 'JetBrains Mono', monospace !important;
+}
+[data-testid="stSidebar"] .stRadio label {
+    color: var(--c-text2) !important;
+    font-size: 12px !important;
+    cursor: pointer;
+    padding: 3px 0;
+    transition: color 0.12s;
+}
+[data-testid="stSidebar"] .stRadio label:hover { color: var(--c-accent) !important; }
+[data-testid="stSidebar"] .stTextInput input {
+    background: var(--c-bg2) !important;
+    border: 1px solid var(--c-border2) !important;
+    color: var(--c-text) !important;
+    font-size: 11px !important;
+    border-radius: 2px !important;
+    padding: 5px 8px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+[data-testid="stSidebar"] .stTextInput input:focus {
+    border-color: var(--c-accent) !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+[data-testid="stSidebar"] .stTextInput label {
+    font-size: 9px !important;
+    color: var(--c-text3) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+}
+
+/* ── Headings ──────────────────────────────────────────────── */
+h1, h2, h3 {
+    color: var(--c-accent) !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.04em !important;
+    text-transform: uppercase !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── File Uploader ─────────────────────────────────────────── */
+/* Hide the widget's accessible label (prevents "Upload…Upload" doubling) */
+[data-testid="stFileUploader"] > label,
+[data-testid="stFileUploader"] > div > label {
+    display: none !important;
+}
+[data-testid="stFileUploaderDropzone"],
+[data-testid="stFileUploadDropzone"] {
+    background-color: var(--c-bg2) !important;
+    border: 1px dashed var(--c-border2) !important;
+    border-radius: 2px !important;
+    transition: border-color 0.15s;
+    padding: 12px !important;
+}
+[data-testid="stFileUploaderDropzone"]:hover,
+[data-testid="stFileUploadDropzone"]:hover { border-color: var(--c-accent) !important; }
+/* Dropzone inner text */
+[data-testid="stFileUploaderDropzone"] > div,
+[data-testid="stFileUploadDropzone"] > div {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+[data-testid="stFileUploaderDropzone"] small,
+[data-testid="stFileUploadDropzone"] small {
+    color: var(--c-text3) !important;
+    font-size: 10px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+[data-testid="stFileUploaderDropzone"] button,
+[data-testid="stFileUploadDropzone"] button {
+    background: transparent !important;
+    border: 1px solid var(--c-border2) !important;
+    color: var(--c-text3) !important;
+    font-size: 10px !important;
+    border-radius: 2px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    padding: 4px 10px !important;
+}
+
+/* ── Buttons (regular + download) ─────────────────────────── */
+.stButton > button,
+.stDownloadButton > button,
+[data-testid="stDownloadButton"] > button {
+    background: transparent !important;
+    color: var(--c-accent) !important;
+    border: 1px solid var(--c-accent) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.1em !important;
+    border-radius: 2px !important;
+    padding: 6px 16px !important;
+    transition: background 0.12s, color 0.12s !important;
+}
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+[data-testid="stDownloadButton"] > button:hover {
+    background: var(--c-accent) !important;
+    color: var(--c-bg) !important;
+}
+.stButton > button:active,
+.stDownloadButton > button:active { transform: translateY(1px) !important; }
+
+/* ── Tabs ──────────────────────────────────────────────────── */
+[data-testid="stTabs"] [role="tablist"] {
+    border-bottom: 1px solid var(--c-border) !important;
+    background: transparent !important;
+    gap: 0 !important;
+    padding: 0 !important;
+}
+[data-testid="stTabs"] [role="tab"] {
+    background: transparent !important;
+    color: var(--c-text3) !important;
+    font-size: 11px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.08em !important;
+    padding: 7px 14px !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    border-radius: 0 !important;
+    transition: color 0.12s !important;
+    text-transform: uppercase !important;
+}
+[data-testid="stTabs"] [role="tab"] p {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    margin: 0 !important;
+}
+[data-testid="stTabs"] [role="tab"]:hover { color: var(--c-accent) !important; }
+[data-testid="stTabs"] [aria-selected="true"] {
+    color: var(--c-accent) !important;
+    border-bottom: 2px solid var(--c-accent) !important;
+}
+
+/* ── Expanders — preserve Material Symbols, fix overlap ────── */
+[data-testid="stExpander"] {
+    background: var(--c-bg2) !important;
+    border: 1px solid var(--c-border) !important;
+    border-radius: 2px !important;
+    overflow: visible !important;
+}
+[data-testid="stExpander"] summary {
+    background: var(--c-bg2) !important;
+    color: var(--c-text2) !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.06em !important;
+    padding: 9px 14px !important;
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+    cursor: pointer !important;
+    min-height: 38px !important;
+    box-sizing: border-box !important;
+}
+/* The icon span MUST keep Material Symbols — do NOT set font-family on it */
+[data-testid="stExpander"] summary > span:first-child {
+    font-family: 'Material Symbols Outlined' !important;
+    font-size: 16px !important;
+    flex-shrink: 0 !important;
+    line-height: 1 !important;
+    color: var(--c-text3) !important;
+}
+/* The label text paragraph */
+[data-testid="stExpander"] summary > p,
+[data-testid="stExpander"] summary > div > p {
+    margin: 0 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+    font-weight: 600 !important;
+    color: var(--c-text2) !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+}
+[data-testid="stExpander"] summary:hover,
+[data-testid="stExpander"] summary:hover > p { color: var(--c-accent) !important; }
+[data-testid="stExpander"] [data-testid="stExpanderDetails"] {
+    padding: 10px 14px 14px !important;
+}
+
+/* ── DataFrames ────────────────────────────────────────────── */
+[data-testid="stDataFrame"] { border: 1px solid var(--c-border) !important; border-radius: 2px !important; }
+[data-testid="stDataFrame"] th {
+    background: var(--c-bg2) !important; color: var(--c-accent) !important;
+    font-size: 10px !important; text-transform: uppercase; letter-spacing: 0.08em;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+[data-testid="stDataFrame"] td {
+    background: var(--c-bg) !important; color: var(--c-text) !important;
+    font-size: 11px !important; border-color: var(--c-border) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── Alerts ────────────────────────────────────────────────── */
+[data-testid="stAlert"] {
+    background: var(--c-bg2) !important;
+    border-radius: 2px !important;
+    font-size: 11px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── Spinner ───────────────────────────────────────────────── */
+.stSpinner > div { border-top-color: var(--c-accent) !important; }
+
+/* ── Slider ────────────────────────────────────────────────── */
+[data-testid="stSlider"] label {
+    font-size: 9px !important; color: var(--c-text3) !important;
+    text-transform: uppercase; letter-spacing: 0.12em;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* ── Scrollbar ─────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: var(--c-bg); }
+::-webkit-scrollbar-thumb { background: var(--c-border2); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--c-accent); }
+
+/* ── Layout ────────────────────────────────────────────────── */
+.block-container { padding: 0 2rem 2rem !important; max-width: 100% !important; }
+
+
+/* ════════════════════════════════════════════════════════════
+   RECONCILIATION COMPONENTS
+   ════════════════════════════════════════════════════════════ */
+
+/* ── Top bar ───────────────────────────────────────────────── */
+.rc-topbar {
+    background: var(--c-bg2);
+    border-bottom: 1px solid var(--c-accent);
+    padding: 10px 24px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: -1rem -2rem 18px;
+}
+.rc-brand { display: flex; align-items: center; gap: 12px; }
+.rc-mark {
+    width: 26px; height: 26px;
+    background: var(--c-accent); color: var(--c-bg);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 11px; border-radius: 2px;
+    letter-spacing: 0.04em;
+}
+.rc-title { font-size: 13px; font-weight: 700; letter-spacing: 0.14em; color: var(--c-text); }
+.rc-sub   { font-size: 9px; letter-spacing: 0.18em; color: var(--c-text3); text-transform: uppercase; }
+.rc-topright { font-size: 10px; color: var(--c-text3); letter-spacing: 0.08em; display: flex; gap: 20px; }
+.rc-topright b { color: var(--c-accent); font-weight: 600; }
+
+/* ── Section heading ───────────────────────────────────────── */
+.rc-section { border-bottom: 1px solid var(--c-border); padding-bottom: 6px; margin: 24px 0 14px; }
+.rc-section-title {
+    font-size: 12px; font-weight: 700; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--c-accent);
+}
+.rc-section-sub { font-size: 10px; color: var(--c-text3); margin-top: 3px; letter-spacing: 0.04em; }
+.rc-hr { border: none; border-top: 1px solid var(--c-border); margin: 16px 0; }
+
+/* ── Headline figure ───────────────────────────────────────── */
+.rc-hero {
+    background: var(--c-bg2);
+    border: 1px solid var(--c-border);
+    border-left: 3px solid var(--c-accent);
+    padding: 18px 22px;
+    display: flex; align-items: center; gap: 28px; flex-wrap: wrap;
+}
+.rc-hero-num {
+    font-size: 42px; font-weight: 700; line-height: 1;
+    color: var(--c-accent); font-variant-numeric: tabular-nums;
+}
+.rc-hero-lbl {
+    font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+    color: var(--c-text3); margin-bottom: 4px;
+}
+.rc-hero-det { font-size: 11px; color: var(--c-text2); }
+
+/* ── Stat tiles ────────────────────────────────────────────── */
+.rc-stat {
+    background: var(--c-bg2);
+    border: 1px solid var(--c-border);
+    border-left: 3px solid var(--c-border2);
+    padding: 11px 14px;
+}
+.rc-stat.good { border-left-color: var(--c-green); }
+.rc-stat.warn { border-left-color: var(--c-accent); }
+.rc-stat.bad  { border-left-color: var(--c-red);   }
+.rc-stat-lbl {
+    font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--c-text3); margin-bottom: 5px;
+}
+.rc-stat-val {
+    font-size: 19px; font-weight: 700; color: var(--c-text);
+    font-variant-numeric: tabular-nums; line-height: 1.1;
+}
+.rc-stat.good .rc-stat-val { color: var(--c-green); }
+.rc-stat.warn .rc-stat-val { color: var(--c-accent); }
+.rc-stat.bad  .rc-stat-val { color: var(--c-red);   }
+.rc-stat-note { font-size: 9px; color: var(--c-text3); margin-top: 3px; }
+
+/* ── Tier distribution bars ────────────────────────────────── */
+.rc-tier { margin: 7px 0; }
+.rc-tier-head {
+    display: flex; justify-content: space-between;
+    font-size: 10px; color: var(--c-text2); margin-bottom: 3px;
+}
+.rc-tier-head span:last-child { color: var(--c-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.rc-tier-bar { height: 5px; background: var(--c-bg3); overflow: hidden; }
+.rc-tier-bar i { display: block; height: 100%; background: var(--c-accent); }
+.rc-tier-bar.t3 i { background: var(--c-cyan); }
+.rc-tier-bar.t4 i { background: var(--c-red);  }
+
+/* ── Severity chips ────────────────────────────────────────── */
+.rc-chip {
+    display: inline-block; font-size: 8.5px; font-weight: 700;
+    letter-spacing: 0.12em; padding: 2px 7px; border-radius: 2px;
+    text-transform: uppercase; white-space: nowrap;
+}
+.rc-chip.critical { background: #2A1214; color: #E3767A; }
+.rc-chip.high     { background: #2A2113; color: #D9A44B; }
+.rc-chip.medium   { background: #12252A; color: #46B3A0; }
+.rc-chip.low      { background: #17181F; color: var(--c-text3); }
+
+/* ── Exception row ─────────────────────────────────────────── */
+.rc-exc {
+    background: var(--c-bg2);
+    border: 1px solid var(--c-border);
+    border-left: 3px solid var(--c-border2);
+    padding: 12px 16px; margin-bottom: 8px;
+}
+.rc-exc.critical { border-left-color: #E3767A; }
+.rc-exc.high     { border-left-color: #D9A44B; }
+.rc-exc.medium   { border-left-color: #46B3A0; }
+.rc-exc-head {
+    display: flex; align-items: center; gap: 10px;
+    flex-wrap: wrap; margin-bottom: 6px;
+}
+.rc-exc-code { font-size: 11px; font-weight: 700; color: var(--c-text); letter-spacing: 0.06em; }
+.rc-exc-ref  { font-size: 10px; color: var(--c-text3); }
+.rc-exc-amt  {
+    margin-left: auto; font-size: 12px; font-weight: 700;
+    color: var(--c-red); font-variant-numeric: tabular-nums;
+}
+.rc-exc-detail { font-size: 11px; color: var(--c-text2); line-height: 1.6; }
+.rc-exc-causes { margin: 7px 0 0; padding-left: 15px; }
+.rc-exc-causes li { font-size: 10px; color: var(--c-text3); line-height: 1.7; }
+
+/* ── Audit trail row ───────────────────────────────────────── */
+.rc-audit {
+    display: grid;
+    grid-template-columns: 96px 132px 1fr auto;
+    gap: 12px; align-items: baseline;
+    padding: 7px 12px; border-bottom: 1px solid var(--c-border);
+    font-size: 10.5px;
+}
+.rc-audit:hover { background: var(--c-bg2); }
+.rc-audit .oid  { color: var(--c-text); font-weight: 600; }
+.rc-audit .tier { font-size: 9px; letter-spacing: 0.08em; }
+.rc-audit .tier.t1 { color: var(--c-green); }
+.rc-audit .tier.t3 { color: var(--c-cyan);  }
+.rc-audit .tier.t4 { color: var(--c-red);   }
+.rc-audit .rule { color: var(--c-text3); }
+.rc-audit .amt  { color: var(--c-text2); font-variant-numeric: tabular-nums; }
+
+/* ── Metrics table ─────────────────────────────────────────── */
+.rc-mtable { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+.rc-mtable th {
+    font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--c-text3); text-align: left; padding: 7px 10px;
+    border-bottom: 1px solid var(--c-border2); font-weight: 600;
+}
+.rc-mtable td {
+    padding: 7px 10px; border-bottom: 1px solid var(--c-border);
+    color: var(--c-text2); font-variant-numeric: tabular-nums;
+}
+.rc-mtable td:first-child { color: var(--c-text); font-weight: 600; }
+.rc-mtable td.ok   { color: var(--c-green); }
+.rc-mtable td.miss { color: var(--c-red);   }
+
+/* ── Form controls: keep every widget on the dark ground ───── */
+.stTextInput input,
+.stNumberInput input,
+.stTextArea textarea,
+[data-testid="stSidebar"] .stNumberInput input {
+    background: var(--c-bg2) !important;
+    border: 1px solid var(--c-border2) !important;
+    color: var(--c-text) !important;
+    border-radius: 2px !important;
+    font-family: 'JetBrains Mono', monospace !important;
+}
+.stTextInput input:focus,
+.stNumberInput input:focus,
+.stTextArea textarea:focus {
+    border-color: var(--c-accent) !important;
+    box-shadow: none !important;
+}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder { color: var(--c-text3) !important; }
+
+/* Number input steppers */
+[data-testid="stNumberInputStepUp"],
+[data-testid="stNumberInputStepDown"] {
+    background: var(--c-bg2) !important;
+    border-left: 1px solid var(--c-border) !important;
+    color: var(--c-text3) !important;
+}
+[data-testid="stNumberInputStepUp"]:hover,
+[data-testid="stNumberInputStepDown"]:hover { color: var(--c-accent) !important; }
+
+/* Select and multiselect */
+[data-baseweb="select"] > div,
+[data-baseweb="select"] [data-baseweb="input"] {
+    background: var(--c-bg2) !important;
+    border: 1px solid var(--c-border2) !important;
+    border-radius: 2px !important;
+    color: var(--c-text) !important;
+}
+[data-baseweb="select"] span,
+[data-baseweb="select"] input { color: var(--c-text) !important; }
+[data-baseweb="select"] svg { fill: var(--c-text3) !important; }
+[data-baseweb="popover"] li,
+[data-baseweb="menu"] li {
+    background: var(--c-bg2) !important;
+    color: var(--c-text2) !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 11px !important;
+}
+[data-baseweb="popover"] li:hover,
+[data-baseweb="menu"] li:hover {
+    background: var(--c-bg3) !important;
+    color: var(--c-accent) !important;
+}
+/* Chosen filter chips */
+[data-baseweb="tag"] {
+    background: var(--c-bg3) !important;
+    border: 1px solid var(--c-accent) !important;
+    color: var(--c-accent) !important;
+    border-radius: 2px !important;
+}
+[data-baseweb="tag"] span { color: var(--c-accent) !important; font-size: 10px !important; }
+
+/* ── Widget containers Streamlit paints white regardless of theme ──
+   The inner <input> already inherits the dark ground; these wrappers do not,
+   so they must be named explicitly or they frame every field in white. */
+body { background: var(--c-bg) !important; }
+
+[data-testid="stNumberInputContainer"] {
+    background: var(--c-bg2) !important;
+    border: 1px solid var(--c-border2) !important;
+    border-radius: 2px !important;
+}
+[data-testid="stNumberInputContainer"]:focus-within { border-color: var(--c-accent) !important; }
+[data-testid="stNumberInputField"] {
+    background: transparent !important;
+    color: var(--c-text) !important;
+    border: none !important;
+}
+
+[data-testid="stMultiSelect"] > div,
+[data-testid="stSelectbox"] > div,
+[data-testid="stMultiSelect"] [data-baseweb="base-input"],
+[data-testid="stSelectbox"] [data-baseweb="base-input"] {
+    background: var(--c-bg2) !important;
+    border-color: var(--c-border2) !important;
+    border-radius: 2px !important;
+}
+[data-testid="stMultiSelect"] input,
+[data-testid="stSelectbox"] input,
+[data-testid="stMultiSelect"] div[value],
+[data-testid="stMultiSelect"] span { color: var(--c-text) !important; }

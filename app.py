@@ -1,0 +1,289 @@
+"""Settlement Recon — reconciliation controller dashboard.
+
+Four screens, in the order a finance controller uses them:
+
+  Run          trigger a cycle, see the match rate resolve
+  Exceptions   the work queue, money at risk first
+  Audit Trail  every match and the rule that produced it
+  Accuracy     how the engine scores against known ground truth
+
+The dashboard never computes. It renders what `recon/` decided, so the screen
+and the audit trail cannot disagree.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import streamlit as st
+
+from recon.matcher import load_bank, load_orders, load_payments, reconcile
+from recon.metrics import score
+from recon.models import SEVERITY, ExceptionCode
+from ui import components as ui
+
+DATA = Path("data")
+
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
+
+def ensure_data(n_orders: int, seed: int) -> dict:
+    if not (DATA / "ground_truth.json").exists():
+        from recon.generator import generate
+        return generate(n_orders=n_orders, seed=seed, out_dir=DATA)
+    return json.loads((DATA / "ground_truth.json").read_text(encoding="utf-8"))
+
+
+def run_cycle(truth: dict):
+    return reconcile(
+        load_orders(DATA / "orders.csv"),
+        load_payments(DATA / "razorpay_recon.csv"),
+        load_bank(DATA / "bank_statement.csv"),
+        settlement_utr=truth["settlement_utr"],
+        fee_rate=truth["fee_rate"],
+        gst_on_fee=truth["gst_on_fee"],
+    )
+
+
+# ---------------------------------------------------------------------------
+# Screens
+# ---------------------------------------------------------------------------
+
+def page_run(truth: dict) -> None:
+    ui.section("Reconciliation Run",
+               f"Merchant orders against Razorpay settled rows and the bank credit "
+               f"for {truth['settlement_date']}")
+
+    st.markdown(
+        '<div style="font-size:11px;color:var(--c-text3);line-height:1.8;">'
+        'Three sources, one cycle. Orders come from the merchant\'s own system, '
+        'settled rows from Razorpay\'s recon report, and a single lump credit '
+        'from the bank. Matching is deterministic — no model is consulted, '
+        'because a match rate is only meaningful if it is reproducible.'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    if st.button("▶  RUN RECONCILIATION", key="run_btn"):
+        st.session_state["result"] = run_cycle(truth)
+
+    result = st.session_state.get("result")
+    if result is None:
+        st.markdown(
+            '<div style="color:var(--c-text3);font-size:11px;margin-top:14px;">'
+            '▸ Awaiting run…</div>', unsafe_allow_html=True)
+        return
+
+    ui.hr()
+    ui.hero(result)
+    st.write("")
+    ui.stat_tiles(result)
+
+    ui.hr()
+    ui.section("Evidence Behind the Match Rate",
+               "Which rule paired each order — strong keys first, weak ones flagged")
+    ui.tier_breakdown(result)
+
+    unmatched = result.orders_seen - len(result.matches)
+    if unmatched:
+        ambiguous = sum(1 for e in result.exceptions
+                        if e.code is ExceptionCode.AMBIGUOUS_MATCH)
+        phantom = sum(1 for e in result.exceptions
+                      if e.code is ExceptionCode.PHANTOM_ORDER)
+        st.markdown(
+            f'<div style="margin-top:14px;font-size:11px;color:var(--c-text2);'
+            f'border-left:2px solid var(--c-red);padding-left:12px;line-height:1.7;">'
+            f'<b style="color:var(--c-red);">{unmatched} orders were not matched.</b><br>'
+            f'{ambiguous} are ambiguous — several settled rows are equally consistent '
+            f'with them, and nothing in the data separates the candidates. '
+            f'{phantom} have no corresponding settled row at all.<br>'
+            f'<span style="color:var(--c-text3);">The engine escalates both rather '
+            f'than guessing: a wrong pairing corrupts two rows, not one.</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def page_exceptions() -> None:
+    result = st.session_state.get("result")
+    ui.section("Exception Queue", "Highest severity first, then largest amount at risk")
+    if result is None:
+        st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
+                    '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
+        return
+
+    ranked = ui.rank_exceptions(result.exceptions)
+    all_codes = sorted({e.code.value for e in ranked})
+
+    c1, c2 = st.columns([2, 1])
+    chosen = c1.multiselect("Filter by type", all_codes, default=[],
+                            label_visibility="collapsed",
+                            placeholder="All exception types")
+    severities = c2.multiselect("Severity", ["CRITICAL", "HIGH", "MEDIUM", "LOW"],
+                                default=[], label_visibility="collapsed",
+                                placeholder="All severities")
+
+    shown = [e for e in ranked
+             if (not chosen or e.code.value in chosen)
+             and (not severities or e.severity in severities)]
+
+    at_risk = sum(e.amount_at_risk for e in shown)
+    st.markdown(
+        f'<div style="font-size:10px;color:var(--c-text3);letter-spacing:0.08em;'
+        f'margin:10px 0 12px;">SHOWING {len(shown)} OF {len(ranked)} '
+        f'· ₹{at_risk:,.2f} AT RISK</div>',
+        unsafe_allow_html=True,
+    )
+    for e in shown:
+        ui.exception_row(e)
+
+
+def page_audit() -> None:
+    result = st.session_state.get("result")
+    ui.section("Audit Trail", "Every pairing the engine made, and the rule that made it")
+    if result is None:
+        st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
+                    '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
+        return
+
+    q = st.text_input("Search", placeholder="Order id, payment id or rule…",
+                      label_visibility="collapsed")
+    rows = result.matches
+    if q:
+        needle = q.strip().lower()
+        rows = [m for m in rows
+                if needle in m.order_id.lower()
+                or needle in m.payment_id.lower()
+                or needle in m.rule.lower()]
+
+    st.markdown(
+        f'<div style="font-size:10px;color:var(--c-text3);letter-spacing:0.08em;'
+        f'margin:8px 0 6px;">{len(rows)} MATCHES</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="rc-audit" style="border-bottom:1px solid var(--c-border2);'
+        'color:var(--c-text3);font-size:8.5px;letter-spacing:0.14em;">'
+        '<span>ORDER</span><span>RULE TIER</span><span>EVIDENCE</span>'
+        '<span>NET TO BANK</span></div>',
+        unsafe_allow_html=True,
+    )
+    for m in rows[:400]:
+        ui.audit_row(m)
+    if len(rows) > 400:
+        st.markdown(f'<div style="font-size:10px;color:var(--c-text3);padding:8px 12px;">'
+                    f'…{len(rows) - 400:,} more. Narrow the search to see them.</div>',
+                    unsafe_allow_html=True)
+
+
+def page_accuracy(truth: dict) -> None:
+    result = st.session_state.get("result")
+    ui.section("Measured Accuracy",
+               "Scored against the defects the generator planted — including the misses")
+    if result is None:
+        st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
+                    '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
+        return
+
+    s = score(result, truth)
+    o = s["overall"]
+
+    tiles = [
+        ("PRECISION", f"{o['precision']:.3f}", "of raised exceptions were real", "good"),
+        ("RECALL", f"{o['recall']:.3f}", "of planted defects were found", "good"),
+        ("FALSE ALARMS", f"{o['fp']}", "raised but not real", "bad" if o["fp"] else "good"),
+        ("MISSED", f"{o['fn']}", "real but not raised", "bad" if o["fn"] else "good"),
+    ]
+    for col, (lbl, val, note, cls) in zip(st.columns(4), tiles):
+        col.markdown(
+            f'<div class="rc-stat {cls}"><div class="rc-stat-lbl">{lbl}</div>'
+            f'<div class="rc-stat-val">{val}</div>'
+            f'<div class="rc-stat-note">{note}</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    ui.hr()
+    ui.metrics_table(s["per_type"])
+
+    st.markdown(
+        f'<div style="margin-top:18px;font-size:11px;color:var(--c-text2);'
+        f'border-left:2px solid var(--c-accent);padding-left:12px;line-height:1.8;">'
+        f'<b style="color:var(--c-accent);">Reading these numbers honestly.</b><br>'
+        f'The match rate ({result.match_rate:.1f}%) is the hard figure — it reflects '
+        f'pairing under missing and colliding identifiers. Classification scores '
+        f'higher because once a row is paired, deciding <i>what</i> is wrong with it '
+        f'is deterministic: Razorpay labels the row type and the fee check is '
+        f'arithmetic. The generator plants sub-rupee fee drift specifically to prove '
+        f'the overcharge threshold does not fire on rounding noise.'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Shell
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    st.set_page_config(page_title="Settlement Recon", page_icon="⬗",
+                       layout="wide", initial_sidebar_state="expanded")
+    ui.load_css()
+
+    with st.sidebar:
+        st.markdown(
+            '<div style="padding:14px 0 18px;border-bottom:1px solid var(--c-border);'
+            'margin-bottom:14px;">'
+            '<div style="font-size:11px;font-weight:700;letter-spacing:0.16em;'
+            'color:var(--c-accent);">SETTLEMENT RECON</div>'
+            '<div style="font-size:8px;letter-spacing:0.18em;color:var(--c-text3);'
+            'text-transform:uppercase;margin-top:3px;">Reconciliation Controller</div>'
+            '</div>', unsafe_allow_html=True)
+
+        page = st.radio("Navigation",
+                        ["Run", "Exceptions", "Audit Trail", "Accuracy"],
+                        label_visibility="collapsed")
+
+        st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
+        st.markdown('<div style="font-size:8px;letter-spacing:0.16em;'
+                    'color:var(--c-text3);text-transform:uppercase;margin-bottom:6px;">'
+                    'Dataset</div>', unsafe_allow_html=True)
+        n_orders = st.number_input("Orders", 50, 20000, 250, step=50)
+        seed = st.number_input("Seed", 1, 9999, 7)
+        if st.button("Regenerate", use_container_width=True):
+            from recon.generator import generate
+            generate(n_orders=int(n_orders), seed=int(seed), out_dir=DATA)
+            st.session_state.pop("result", None)
+            st.rerun()
+
+        # Read before the page body runs, so the badge reflects the last
+        # completed run rather than lagging a rerun behind it.
+        result = st.session_state.get("result")
+        st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
+        st.markdown(
+            f'<div style="font-size:9px;color:var(--c-text3);line-height:2;'
+            f'letter-spacing:0.06em;">'
+            f'ENGINE&nbsp;&nbsp;<span style="color:var(--c-green);">■ DETERMINISTIC</span><br>'
+            f'RESULT&nbsp;&nbsp;<span style="color:'
+            f'{"var(--c-green)" if result else "var(--c-text3)"};">'
+            f'{"■ " + format(result.match_rate, ".1f") + "% MATCHED" if result else "□ NONE"}'
+            f'</span></div>',
+            unsafe_allow_html=True,
+        )
+
+    truth = ensure_data(int(n_orders), int(seed))
+    ui.top_bar(truth["settlement_date"], truth["settlement_utr"])
+
+    if page == "Run":
+        page_run(truth)
+    elif page == "Exceptions":
+        page_exceptions()
+    elif page == "Audit Trail":
+        page_audit()
+    else:
+        page_accuracy(truth)
+
+
+if __name__ == "__main__":
+    main()

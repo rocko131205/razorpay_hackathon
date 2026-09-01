@@ -100,6 +100,7 @@ class ExceptionCode(str, Enum):
     ORPHAN_PAYMENT       = "ORPHAN_PAYMENT"        # in Razorpay, not in shop's orders
     PHANTOM_ORDER        = "PHANTOM_ORDER"         # shop says PAID, no payment exists
     SETTLEMENT_SHORTFALL = "SETTLEMENT_SHORTFALL"  # bundle total != bank credit
+    AMBIGUOUS_MATCH      = "AMBIGUOUS_MATCH"       # several equally good candidates
 
 
 # Severity drives ordering in the exception queue: money at risk first.
@@ -107,6 +108,7 @@ SEVERITY: dict[ExceptionCode, str] = {
     ExceptionCode.PHANTOM_ORDER:        "CRITICAL",
     ExceptionCode.CHARGEBACK:           "CRITICAL",
     ExceptionCode.SETTLEMENT_SHORTFALL: "CRITICAL",
+    ExceptionCode.AMBIGUOUS_MATCH:      "HIGH",
     ExceptionCode.ORPHAN_PAYMENT:       "HIGH",
     ExceptionCode.DUPLICATE_SETTLEMENT: "HIGH",
     ExceptionCode.FEE_MISMATCH:         "HIGH",

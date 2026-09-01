@@ -38,7 +38,14 @@ DEFECT_MIX: dict[ExceptionCode, int] = {
     ExceptionCode.DUPLICATE_SETTLEMENT:  3,
     ExceptionCode.ORPHAN_PAYMENT:        4,
     ExceptionCode.PHANTOM_ORDER:         5,
+    ExceptionCode.AMBIGUOUS_MATCH:      12,   # 6 colliding pairs
 }
+
+# Realism knobs. These are not defects the engine should report — they are
+# noise that makes the defects above harder to find, which is the point.
+PHONE_MISSING_RATE = 0.15   # Razorpay rows with no phone captured
+FEE_ROUNDING_RATE  = 0.08   # sub-tolerance drift that must NOT be flagged
+CUTOFF_STRADDLE    = 6      # rows settling within minutes of the cycle boundary
 
 
 def _money(x: float) -> float:
@@ -89,16 +96,32 @@ def generate(
             assigned[pool[cursor]] = code
             cursor += 1
 
+    # Ambiguous orders are allocated in pairs and share an identical amount
+    # and creation time, so neither can be told from the other.
+    ambiguous = [o for o, c in assigned.items() if c is ExceptionCode.AMBIGUOUS_MATCH]
+    twin_amount: dict[str, float] = {}
+    twin_created: dict[str, str] = {}
+    for i in range(0, len(ambiguous) - 1, 2):
+        a, b = ambiguous[i], ambiguous[i + 1]
+        shared_amt = _money(rng.choice([899, 1499, 2199, 3299]) + rng.randint(0, 90))
+        shared_time = (base - timedelta(hours=rng.randint(3, 9))).isoformat(timespec="seconds")
+        twin_amount[a] = twin_amount[b] = shared_amt
+        twin_created[a] = twin_created[b] = shared_time
+
     orders: list[dict] = []
     payments: list[dict] = []
     truth: list[dict] = []
 
     for oid in ids:
-        amount = _money(rng.choice([199, 299, 499, 750, 999, 1250, 1999, 2500, 3499, 4999])
-                        + rng.randint(0, 99))
-        phone = f"9{rng.randint(100000000, 999999999)}"
-        created = (base - timedelta(hours=rng.randint(2, 20))).isoformat(timespec="seconds")
         defect = assigned.get(oid)
+        amount = twin_amount.get(oid) or _money(
+            rng.choice([199, 299, 499, 750, 999, 1250, 1999, 2500, 3499, 4999])
+            + rng.randint(0, 99)
+        )
+        phone = f"9{rng.randint(100000000, 999999999)}"
+        created = twin_created.get(oid) or (
+            base - timedelta(hours=rng.randint(2, 20))
+        ).isoformat(timespec="seconds")
 
         # ---- the shop's own order row -----------------------------------
         order_status = "PAID"
@@ -137,6 +160,12 @@ def generate(
             bad_rate = FEE_RATE + rng.choice([0.004, 0.006, 0.008])
             fee, tax = _fee_for(amount, bad_rate)
 
+        elif defect is ExceptionCode.AMBIGUOUS_MATCH:
+            # Neither receipt nor phone survives, so the only signals left are
+            # amount and time — which the twin shares exactly.
+            receipt = None
+            settled_at = (base - timedelta(minutes=rng.randint(1, 30))).isoformat(timespec="seconds")
+
         elif defect is ExceptionCode.MISSING_RECEIPT:
             # Merchant never set `receipt` when creating the order, so the
             # primary join key is gone and the matcher must fall back.
@@ -152,6 +181,21 @@ def generate(
         elif defect is ExceptionCode.CHARGEBACK:
             ptype = "chargeback"
 
+        # Razorpay does not always capture a contact against the payment.
+        # Where it is absent, Tier 3 cannot fire and the match degrades.
+        row_phone = phone
+        if defect is ExceptionCode.AMBIGUOUS_MATCH or rng.random() < PHONE_MISSING_RATE:
+            row_phone = ""
+
+        # Fee drift of a paisa or two is rounding, not an overcharge. Present
+        # so that a naive equality check on fees produces false alarms.
+        if defect is None and rng.random() < FEE_ROUNDING_RATE:
+            fee = _money(fee + rng.choice([-0.02, -0.01, 0.01, 0.02]))
+
+        # A handful of rows settle within minutes of the cycle boundary.
+        if defect is None and rng.random() < CUTOFF_STRADDLE / max(n_orders, 1):
+            settled_at = (base + timedelta(minutes=rng.randint(1, 12))).isoformat(timespec="seconds")
+
         payments.append({
             "payment_id": pid,
             "order_receipt": receipt or "",
@@ -162,7 +206,7 @@ def generate(
             "settled_at": settled_at,
             "settlement_utr": utr,
             "method": rng.choice(["upi", "card", "netbanking", "wallet"]),
-            "customer_phone": phone,
+            "customer_phone": row_phone,
         })
 
         if defect is ExceptionCode.DUPLICATE_SETTLEMENT:
@@ -179,6 +223,7 @@ def generate(
                 ExceptionCode.CHARGEBACK: amount,
                 ExceptionCode.DUPLICATE_SETTLEMENT: amount,
                 ExceptionCode.LATE_SETTLEMENT: amount,
+                ExceptionCode.AMBIGUOUS_MATCH: amount,
             }.get(defect, 0.0)
             truth.append({"order_id": oid, "defect": defect.value,
                           "amount_at_risk": _money(at_risk)})

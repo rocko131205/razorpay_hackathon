@@ -122,28 +122,40 @@ def _match_one(
     by_amount: dict[float, list[Payment]],
     consumed: set[str],
     known_order_ids: set[str],
-) -> tuple[Optional[Payment], Tier, str]:
+) -> tuple[Optional[Payment], Tier, str, list[Payment]]:
     """Run the cascade for a single order.
 
-    Returns the payment, the tier that found it, and a sentence stating the
-    rule that fired — which is what lands in the audit trail.
+    Returns the payment, the tier that found it, a sentence stating the rule
+    that fired, and — when a weak tier found several equally good candidates —
+    the tied rows.
+
+    The tie case matters. Two orders of the same value, in the same window,
+    with no receipt and no phone are genuinely indistinguishable: no rule can
+    separate them because the distinguishing information was never recorded.
+    Picking one would be a coin flip dressed up as a match, so the engine
+    declines and escalates instead.
     """
     # Tier 1 — the merchant's own id, echoed back by Razorpay. Definitive.
     for p in by_receipt.get(order.order_id, []):
         if p.payment_id not in consumed:
-            return p, Tier.RECEIPT, f"order_receipt == {order.order_id}"
+            return p, Tier.RECEIPT, f"order_receipt == {order.order_id}", []
 
     # Tier 3 — no usable receipt. Amount, timing and phone together are
     # strong circumstantial evidence.
-    for p in by_amount.get(round(order.amount, 2), []):
-        if p.payment_id in consumed:
-            continue
-        if p.customer_phone and p.customer_phone == order.customer_phone:
-            if _hours_apart(order.created_at, p.settled_at) <= DATE_WINDOW_HOURS:
-                return p, Tier.AMOUNT_PHONE, (
-                    f"amount {order.amount:.2f} + phone {order.customer_phone} "
-                    f"within {DATE_WINDOW_HOURS}h"
-                )
+    t3 = [
+        p for p in by_amount.get(round(order.amount, 2), [])
+        if p.payment_id not in consumed
+        and p.customer_phone
+        and p.customer_phone == order.customer_phone
+        and _hours_apart(order.created_at, p.settled_at) <= DATE_WINDOW_HOURS
+    ]
+    if len(t3) == 1:
+        return t3[0], Tier.AMOUNT_PHONE, (
+            f"amount {order.amount:.2f} + phone {order.customer_phone} "
+            f"within {DATE_WINDOW_HOURS}h"
+        ), []
+    if len(t3) > 1:
+        return None, Tier.UNMATCHED, "several rows share amount, phone and window", t3
 
     # Tier 4 — amount alone, within tolerance and window. Weak; always flagged.
     #
@@ -151,6 +163,7 @@ def _match_one(
     # limits here. Without that guard an amount collision lets one order steal
     # another's payment, which then cascades: the robbed order is reported as
     # a phantom and the thief's true exception is never raised.
+    t4: list[Payment] = []
     for cand_amt, rows in by_amount.items():
         if abs(cand_amt - order.amount) > AMOUNT_TOLERANCE:
             continue
@@ -160,12 +173,18 @@ def _match_one(
             if p.order_receipt and p.order_receipt != order.order_id and p.order_receipt in known_order_ids:
                 continue
             if _hours_apart(order.created_at, p.settled_at) <= DATE_WINDOW_HOURS:
-                return p, Tier.AMOUNT_ONLY, (
-                    f"amount {order.amount:.2f} within ±{AMOUNT_TOLERANCE:.2f}, "
-                    f"no receipt or phone corroboration"
-                )
+                t4.append(p)
+    if len(t4) == 1:
+        return t4[0], Tier.AMOUNT_ONLY, (
+            f"amount {order.amount:.2f} within ±{AMOUNT_TOLERANCE:.2f}, "
+            f"no receipt or phone corroboration"
+        ), []
+    if len(t4) > 1:
+        return None, Tier.UNMATCHED, (
+            f"{len(t4)} rows match on amount alone; nothing separates them"
+        ), t4
 
-    return None, Tier.UNMATCHED, "no payment found by any rule"
+    return None, Tier.UNMATCHED, "no payment found by any rule", []
 
 
 def reconcile(
@@ -195,9 +214,37 @@ def reconcile(
 
     result = ReconResult(orders_seen=len(orders), payments_seen=len(payments))
     consumed: set[str] = set()
+    # Rows already accounted for by an ambiguity. They are unmatched, but they
+    # are not orphans — the AMBIGUOUS_MATCH exception already names them, and
+    # reporting them again would double-count the same rupees.
+    contested: set[str] = set()
 
     for order in orders:
-        payment, tier, rule = _match_one(order, by_receipt, by_amount, consumed, known_order_ids)
+        payment, tier, rule, tied = _match_one(
+            order, by_receipt, by_amount, consumed, known_order_ids
+        )
+
+        if payment is None and tied:
+            # Several candidates, nothing to choose between them. Refusing is
+            # the correct answer: a wrong pairing corrupts two rows, not one.
+            result.exceptions.append(Exception_.build(
+                ExceptionCode.AMBIGUOUS_MATCH,
+                order_id=order.order_id,
+                amount_at_risk=order.amount,
+                detail=(f"{len(tied)} settled rows are equally consistent with "
+                        f"{order.order_id} (₹{order.amount:,.2f}). {rule}. "
+                        f"No rule can separate them — escalated rather than guessed."),
+                possible_causes=[
+                    "Two customers paid identical amounts in the same window",
+                    "The order receipt was never recorded against either payment",
+                    "A duplicate charge the shop has not noticed",
+                ],
+                evidence={"candidates": [p.payment_id for p in tied],
+                          "order_amount": order.amount,
+                          "rule_attempted": rule},
+            ))
+            contested.update(p.payment_id for p in tied)
+            continue
 
         if payment is None:
             # Shop believes it was paid; Razorpay has no such payment. The
@@ -312,7 +359,7 @@ def reconcile(
 
     order_ids = known_order_ids
     for p in payments:
-        if p.payment_id in consumed:
+        if p.payment_id in consumed or p.payment_id in contested:
             continue
         if p.order_receipt and p.order_receipt in order_ids and seen_receipts[p.order_receipt] > 1:
             result.exceptions.append(Exception_.build(

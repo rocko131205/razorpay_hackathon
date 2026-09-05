@@ -64,6 +64,7 @@ def run_cycle(truth: dict, cycle: int = 1):
     payments = load_payments(DATA / "razorpay_recon.csv")
     bank_path = DATA / "bank_statement.csv"
     utr = truth["settlement_utr"]
+    prior: tuple[str, ...] = ()
 
     if cycle == 2:
         nxt = DATA / "razorpay_recon_cycle2.csv"
@@ -73,13 +74,54 @@ def run_cycle(truth: dict, cycle: int = 1):
         if b2.exists():
             bank_path = b2
         utr = truth["next_cycle_utr"]
+        # Cycle one's payout has already landed, so its rows are settled rather
+        # than late. Without this every row from the first report is re-flagged.
+        prior = (truth["settlement_utr"],)
 
     return reconcile(
         load_orders(DATA / "orders.csv"), payments, load_bank(bank_path),
         settlement_utr=utr,
+        prior_utrs=prior,
         fee_rate=truth["fee_rate"],
         gst_on_fee=truth["gst_on_fee"],
     )
+
+
+def _clear_derived() -> None:
+    """Drop anything computed from a previous run.
+
+    Briefs and answers are cached per cycle so switching views does not re-call
+    the model. A new reconciliation makes all of them stale at once.
+    """
+    for key in ("brief_1", "brief_2", "answer_1", "answer_2",
+                "asked_1", "asked_2"):
+        st.session_state.pop(key, None)
+    st.session_state["view_cycle"] = 1
+
+
+def current_result():
+    """The cycle the user has chosen to look at, and its number.
+
+    Cycle two is stored alongside cycle one rather than replacing it, because
+    the resolution table needs both side by side. The side effect was that every
+    other screen stayed permanently on cycle one — the queue, the audit trail
+    and the Q&A could not see the loop close. This is the switch.
+    """
+    if st.session_state.get("view_cycle") == 2:
+        r2 = st.session_state.get("result2")
+        if r2 is not None:
+            return r2, 2
+    return st.session_state.get("result"), 1
+
+
+def cycle_badge(cycle: int) -> None:
+    """Say which cycle is on screen, but only when it is not the obvious one."""
+    if cycle == 1:
+        return
+    st.markdown(
+        '<div style="font-size:10px;color:var(--c-green);letter-spacing:0.1em;'
+        'margin:-4px 0 10px;">▸ VIEWING CYCLE 2 — the next payout\'s rows have '
+        'arrived</div>', unsafe_allow_html=True)
 
 
 # ---------------------------------------------------------------------------
@@ -109,6 +151,7 @@ def page_run(truth: dict) -> None:
                 st.session_state["result"] = result
                 st.session_state["live"] = live
                 st.session_state.pop("result2", None)
+                _clear_derived()
             except razorpay_client.RazorpayError as exc:
                 st.error(str(exc))
 
@@ -158,6 +201,7 @@ def _run_buttons(truth: dict) -> None:
         st.session_state["result"] = run_cycle(truth, cycle=1)
         st.session_state["cycle"] = 1
         st.session_state.pop("result2", None)
+        _clear_derived()
     if c2.button("▶▶  RUN NEXT CYCLE", key="run_btn2", use_container_width=True,
                  disabled="result" not in st.session_state,
                  help="Tomorrow's report arrives. Carried-forward findings resolve or harden."):
@@ -217,12 +261,15 @@ def _render_synthetic_run(truth: dict, result) -> None:
 
 
 def page_exceptions() -> None:
-    result = st.session_state.get("result")
+    result, cycle = current_result()
     ui.section("Exception Queue", "Highest severity first, then largest amount at risk")
+    cycle_badge(cycle)
     if result is None:
         st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
                     '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
         return
+
+    _morning_brief(result, cycle)
 
     ranked = ui.rank_exceptions(result.exceptions)
     all_codes = sorted({e.code.value for e in ranked})
@@ -250,9 +297,41 @@ def page_exceptions() -> None:
         ui.exception_row(e)
 
 
+def _morning_brief(result, cycle: int = 1) -> None:
+    """Triage the queue before the controller starts working it.
+
+    The engine already ranked and totalled everything; what the model adds is
+    judgement about what can be batched and what can wait. It is handed finished
+    arithmetic and forbidden from calculating, exactly as the Q&A layer is — so
+    the brief can be checked line by line against the queue below it.
+    """
+    which = qa_agent.provider()
+    c1, c2 = st.columns([1, 3])
+    if c1.button("◆  MORNING BRIEF", key="brief_btn", use_container_width=True,
+                 help="What to do first, what can be batched, what can wait"):
+        with st.spinner("Triaging the queue…"):
+            st.session_state[f"brief_{cycle}"] = qa_agent.brief(result)
+    c2.markdown(
+        f'<div style="font-size:10px;color:var(--c-text3);line-height:2.6;'
+        f'letter-spacing:0.04em;">Ranking and totals are computed here; the model '
+        f'only decides what to say about them &nbsp;·&nbsp; '
+        f'{html.escape(which) if which else "no model key — triaged from the ledger"}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+    answer = st.session_state.get(f"brief_{cycle}")
+    if answer is None:
+        return
+    ui.brief_card(answer)
+    with st.expander("What the model was allowed to see"):
+        st.code("\n".join(qa_agent._brief_facts(result)), language="text")
+
+
 def page_audit() -> None:
-    result = st.session_state.get("result")
+    result, cycle = current_result()
     ui.section("Audit Trail", "Every pairing the engine made, and the rule that made it")
+    cycle_badge(cycle)
     if result is None:
         st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
                     '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
@@ -289,7 +368,7 @@ def page_audit() -> None:
 
 
 def page_accuracy(truth: dict) -> None:
-    result = st.session_state.get("result")
+    result, cycle = current_result()
     ui.section("Measured Accuracy",
                "Scored against the defects the generator planted — including the misses")
     if result is None:
@@ -297,7 +376,25 @@ def page_accuracy(truth: dict) -> None:
                     '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
         return
 
-    s = score(result, truth)
+    # Scoring needs an answer key, and only the generator produces one. Grading a
+    # live run against the synthetic key would compare unrelated records and print
+    # numbers that mean nothing, so the page declines rather than inventing them.
+    if st.session_state.get("source") == "live":
+        st.markdown(
+            '<div style="font-size:11px;color:var(--c-text2);line-height:1.8;'
+            'border-left:2px solid var(--c-accent);padding-left:12px;">'
+            '<b style="color:var(--c-accent);">Accuracy is not defined for live data.</b><br>'
+            'Measuring accuracy requires an answer key — a record of which defects are '
+            'genuinely present. The generator can write one because it planted them. '
+            'Nobody has one for a real merchant\'s settlements, which is precisely why '
+            'this tool exists.<br>'
+            '<span style="color:var(--c-text3);">Switch the data source to Synthetic '
+            'to see measured accuracy.</span></div>',
+            unsafe_allow_html=True)
+        return
+
+    cycle_badge(cycle)
+    s = score(result, truth, cycle=cycle)
     inf = s["inferred"]["overall"]
     m = s["matching"]
 
@@ -346,9 +443,10 @@ def page_accuracy(truth: dict) -> None:
 
 
 def page_ask() -> None:
-    result = st.session_state.get("result")
+    result, cycle = current_result()
     ui.section("Ask the Ledger",
                "Questions answered only from what this reconciliation established")
+    cycle_badge(cycle)
     if result is None:
         st.markdown('<div style="color:var(--c-text3);font-size:11px;">'
                     '▸ Run a reconciliation first.</div>', unsafe_allow_html=True)
@@ -389,10 +487,10 @@ def page_ask() -> None:
     )
     if st.button("ASK", key="ask_btn") and question.strip():
         with st.spinner("Reading the match ledger…"):
-            st.session_state["answer"] = qa_agent.ask(result, question.strip())
-        st.session_state["asked"] = question.strip()
+            st.session_state[f"answer_{cycle}"] = qa_agent.ask(result, question.strip())
+        st.session_state[f"asked_{cycle}"] = question.strip()
 
-    answer = st.session_state.get("answer")
+    answer = st.session_state.get(f"answer_{cycle}")
     if answer is None:
         return
 
@@ -411,7 +509,8 @@ def page_ask() -> None:
     )
 
     with st.expander("What the model was allowed to see"):
-        context, _ = qa_agent.select_context(result, st.session_state.get("asked", ""))
+        context, _ = qa_agent.select_context(
+            result, st.session_state.get(f"asked_{cycle}", ""))
         st.code("\n".join(context), language="text")
 
 
@@ -457,6 +556,16 @@ def main() -> None:
                     st.success(f"Created {len(made)} orders.")
                 except razorpay_client.RazorpayError as exc:
                     st.error(str(exc))
+
+        if st.session_state.get("result2") is not None:
+            st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
+            st.markdown('<div style="font-size:8px;letter-spacing:0.16em;'
+                        'color:var(--c-text3);text-transform:uppercase;'
+                        'margin-bottom:6px;">Viewing</div>', unsafe_allow_html=True)
+            view = st.radio("Cycle", ["Cycle 1", "Cycle 2"],
+                            label_visibility="collapsed", horizontal=True,
+                            key="cycle_choice")
+            st.session_state["view_cycle"] = 2 if view == "Cycle 2" else 1
 
         st.markdown('<hr class="rc-hr">', unsafe_allow_html=True)
         st.markdown('<div style="font-size:8px;letter-spacing:0.16em;'

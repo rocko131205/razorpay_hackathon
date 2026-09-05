@@ -116,12 +116,16 @@ def pending_hero(result: ReconResult, n_orders: int) -> None:
 
 def stat_tiles(result: ReconResult) -> None:
     crit = sum(1 for e in result.exceptions if e.severity == "CRITICAL")
-    auto = sum(1 for e in result.exceptions if e.severity == "LOW")
+    # LOW severity means "not urgent", which is not the same as "will resolve
+    # itself" — a full refund has already happened and resolves nothing. The
+    # findings that genuinely close on their own are the carried-forward ones,
+    # and those are HIGH. Labelling this tile as self-resolving conflated the two.
+    low = sum(1 for e in result.exceptions if e.severity == "LOW")
     tiles = [
         ("EXCEPTIONS", f"{len(result.exceptions)}", "raised this cycle", "warn"),
-        ("MONEY AT RISK", f"₹{result.amount_at_risk:,.0f}", "across all exceptions", "bad"),
+        ("MONEY AT RISK", f"₹{result.amount_at_risk:,.0f}", "not yet proven safe", "bad"),
         ("NEEDS A HUMAN", f"{crit}", "critical severity", "bad" if crit else "good"),
-        ("LOW PRIORITY", f"{auto}", "expected to self-resolve", "good"),
+        ("LOW PRIORITY", f"{low}", "low urgency · nothing due today", "good"),
     ]
     for col, (lbl, val, note, cls) in zip(st.columns(4), tiles):
         col.markdown(
@@ -253,3 +257,23 @@ def rank_exceptions(exceptions: list[Exception_]) -> list[Exception_]:
     """Money at risk first, within severity — the order a controller works in."""
     return sorted(exceptions,
                   key=lambda e: (SEVERITY_ORDER[e.severity], -e.amount_at_risk))
+
+
+def brief_card(answer) -> None:
+    """The triage paragraph, labelled with what produced it.
+
+    The row count and model name are shown for the same reason the Ask page
+    shows its context: an answer a controller cannot trace is an answer they
+    cannot act on.
+    """
+    src = answer.model if answer.model else "ledger only — no model key"
+    st.markdown(
+        f'<div style="font-size:10px;color:var(--c-text3);letter-spacing:0.1em;'
+        f'margin:14px 0 6px;">MORNING BRIEF &nbsp;·&nbsp; '
+        f'{answer.rows_used} LEDGER ROWS CONSULTED &nbsp;·&nbsp; '
+        f'{html.escape(str(src)).upper()}</div>'
+        f'<div class="rc-exc" style="border-left-color:var(--c-accent);">'
+        f'<div class="rc-exc-detail" style="white-space:pre-wrap;">'
+        f'{html.escape(answer.text)}</div></div>',
+        unsafe_allow_html=True,
+    )

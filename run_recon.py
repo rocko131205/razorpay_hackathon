@@ -104,6 +104,7 @@ def main() -> None:
         cycle2 = reconcile(
             load_orders(DATA / "orders.csv"), combined, bank2,
             settlement_utr=truth["next_cycle_utr"],
+            prior_utrs=(truth["settlement_utr"],),
             fee_rate=truth["fee_rate"], gst_on_fee=truth["gst_on_fee"],
         )
         res = resolution(result, cycle2, truth)

@@ -52,7 +52,8 @@ def _index(result: ReconResult, truth: dict) -> tuple[dict, dict]:
     return planted, raised
 
 
-def score(result: ReconResult, ground_truth: dict | str | Path) -> dict:
+def score(result: ReconResult, ground_truth: dict | str | Path,
+          cycle: int = 1) -> dict:
     truth = _load(ground_truth)
     planted, raised = _index(result, truth)
 
@@ -60,7 +61,14 @@ def score(result: ReconResult, ground_truth: dict | str | Path) -> dict:
     # engine reports them as UNRESOLVED_NO_ROW. That is the correct answer for
     # this cycle, not a miss, so the expectation is remapped rather than the
     # engine being penalised for declining to guess.
-    pending = set(truth.get("resolves_on_cycle2", [])) | set(truth.get("true_phantoms", []))
+    #
+    # By cycle two those rows have arrived and should have been matched, so only
+    # the genuine phantoms are still expected to be open. Scoring cycle two
+    # against cycle one's expectation would count every correct resolution as a
+    # miss — punishing the engine for closing the loop.
+    pending = set(truth.get("true_phantoms", []))
+    if cycle == 1:
+        pending |= set(truth.get("resolves_on_cycle2", []))
     expected_unresolved = {c: v for c, v in planted.items()
                            if c not in {"LATE_SETTLEMENT", "PHANTOM_ORDER"}}
     if pending:

@@ -193,11 +193,19 @@ def reconcile(
     bank: Iterable[BankLine],
     *,
     settlement_utr: str,
+    prior_utrs: Iterable[str] = (),
     fee_rate: float = 0.02,
     gst_on_fee: float = 0.18,
 ) -> ReconResult:
-    """Reconcile one settlement cycle."""
+    """Reconcile one settlement cycle.
+
+    `prior_utrs` names payouts that have already landed in earlier cycles. A row
+    carrying one of them is not late — it settled, on time, before today. Without
+    that, re-running against a later cycle re-flags every previously settled row
+    as late, which buries the findings that actually changed.
+    """
     started = time.perf_counter()
+    already_settled = set(prior_utrs)
 
     orders = list(orders)
     payments = list(payments)
@@ -332,7 +340,8 @@ def reconcile(
                           "charged_tax": payment.tax, "expected_tax": exp_tax},
             ))
 
-        if payment.settlement_utr != settlement_utr:
+        if (payment.settlement_utr != settlement_utr
+                and payment.settlement_utr not in already_settled):
             result.exceptions.append(Exception_.build(
                 ExceptionCode.LATE_SETTLEMENT,
                 order_id=order.order_id, payment_id=payment.payment_id,

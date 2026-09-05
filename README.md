@@ -5,15 +5,15 @@
 Built for the Razorpay AI Buildathon, **Track 04 — AI Finance Controller**.
 
 ```
-250 orders · 236 settled rows · 2 bank credits
-completed in 2 ms (145,872 orders/sec)
+250 orders · 236 settled rows · 1 bank credit
+completed in 2 ms (137,435 orders/sec)
 
 MATCHED   211 / 250  = 84.4%
     T1_RECEIPT        201     ← merchant's own id, echoed by Razorpay
     T3_AMOUNT_PHONE     8     ← no receipt; amount + phone + window
     T4_AMOUNT_ONLY      2     ← weak, always flagged
 
-EXCEPTIONS 93   ₹164,115.31 at risk
+EXCEPTIONS 92   ₹114,315.00 at risk
     CRITICAL  CHARGEBACK              4
     HIGH      UNRESOLVED_NO_ROW      27
     HIGH      AMBIGUOUS_MATCH        12
@@ -191,6 +191,56 @@ Either Anthropic (`claude-opus-5`) or Gemini works — the grounding lives in th
 | **Accuracy** | Scored against the answer key, misses included |
 | **Ask** | Grounded Q&A over the ledger |
 
+## Architecture
+
+```mermaid
+flowchart TD
+    GEN["generator.py<br/>invents the three files<br/>and the answer key"]
+    RZP["razorpay_client.py<br/>live test-mode API"]
+    CSV["data/*.csv<br/>orders · settled rows · bank"]
+    SHAPES["models.py<br/>one shared shape for every row<br/>Order · Payment · BankLine"]
+    MATCH["matcher.py — the engine<br/>Stage 1: cascade T1 → T3 → T4<br/>Stage 2: UTR arithmetic<br/>deterministic, standard library only"]
+    LEDGER["ReconResult — the match ledger<br/>every Match carries the rule that made it"]
+    TRUTH["ground_truth.json<br/>the answer key"]
+    METRICS["metrics.py<br/>precision, recall, cross-cycle resolution"]
+    QA["qa_agent.py<br/>Python retrieves, the model explains<br/>forbidden from calculating"]
+    UI["app.py + ui/<br/>Run · Exceptions · Audit · Accuracy · Ask"]
+    CLI["run_recon.py<br/>terminal report, zero dependencies"]
+
+    GEN --> CSV
+    GEN --> TRUTH
+    CSV --> SHAPES
+    RZP --> SHAPES
+    SHAPES --> MATCH
+    MATCH --> LEDGER
+    LEDGER --> METRICS
+    TRUTH --> METRICS
+    LEDGER --> QA
+    LEDGER --> UI
+    METRICS --> UI
+    QA --> UI
+    LEDGER --> CLI
+```
+
+Every arrow points upward out of the engine. `recon/` imports nothing from `ui/`
+or `app.py`, which is why `python run_recon.py` works on a bare interpreter —
+and why the engine cannot tell a live Razorpay row from a generated one.
+
+### The cascade
+
+```mermaid
+flowchart TD
+    O["one order"] --> T1{"order_receipt<br/>matches?"}
+    T1 -->|yes| M1["T1 · certain"]
+    T1 -->|no| T3{"amount + phone<br/>within 36h?"}
+    T3 -->|"exactly one"| M3["T3 · probable"]
+    T3 -->|"several"| AMB["AMBIGUOUS_MATCH<br/>escalate, do not guess"]
+    T3 -->|none| T4{"amount alone<br/>within ₹1?"}
+    T4 -->|"exactly one"| M4["T4 · weak — always flagged"]
+    T4 -->|"several"| AMB
+    T4 -->|none| NONE["UNRESOLVED_NO_ROW<br/>carry forward to the next cycle"]
+```
+
 ## Layout
 
 ```
@@ -215,10 +265,12 @@ Recorded in full in [`DECISIONS.md`](DECISIONS.md), each with a named regression
 - **Weak matching stole payments.** With two orders at the same value, the amount-only tier could claim a payment whose receipt named a *different* real order — and that order was then reported missing. One bad match produced two wrong answers.
 - **Contested rows double-counted.** Payments tied up in an ambiguity are already named by that exception; sweeping them into the orphan bucket reported the same rupees twice. Orphan precision 0.25 → 1.00.
 - **Accuracy overstated itself.** The first version reported one blended precision of 1.000 across all checks — including ones that only read Razorpay's `type` column. Split into inferred and labelled, and the headline is now 0.973 with the misses named.
+- **Cycle two re-flagged everything that had already settled.** Comparing every row to the new payout's UTR turned 236 correctly settled rows into 189 `LATE_SETTLEMENT` findings, burying the 22 that had actually changed. Cycle two: 281 exceptions → 70, ₹419,287 → ₹63,311.
+- **Retrieval could not see what a question was about.** *"How much am I being overcharged in fees?"* returned *the facts do not specify* — the grounding working exactly as designed, and the retrieval failing, because fee rows are small and never survived the largest-amounts cut. It now answers ₹143.95 across 12 exceptions, which matches the ledger exactly.
 
 ## Limits
 
 - Match rates and accuracy are measured against generated data with a known answer key. Real merchant data is messier, and the honest expectation is that the weak tiers degrade first.
 - The bank stage assumes one credit per UTR. Merchants whose bank merges or splits payouts would need that relaxed.
 - Ambiguous pairs are escalated, never resolved. Resolving them needs information the settlement report does not carry.
-- Neither live model path was exercised — no API key was available during development. Both are written against documented interfaces, but the ledger-only fallback is what is tested and what runs by default.
+- The Gemini path has been exercised against a real key — the truncation and model-discovery fixes in [`DECISIONS.md`](DECISIONS.md) came out of running it. The Anthropic path is written against the documented SDK but has not been run. The ledger-only fallback is what runs by default and is what the tests cover.

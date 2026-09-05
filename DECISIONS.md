@@ -80,10 +80,11 @@ runs on synthetic data; without an Anthropic key the same question is answered
 straight from the ledger. A demo that depends on a network is a demo that can
 fail in front of the person evaluating it.
 
-The live model path is written against the documented SDK but was never
-exercised — no API key was available while building. The fallback is what is
-tested, and it is what runs by default. Stated in the README rather than left
-for someone to discover.
+The Gemini path has since been exercised against a real key — the truncation
+and model-discovery fixes recorded below came out of running it, not from
+reading docs. The Anthropic path is written against the documented SDK and has
+not been run. The ledger-only fallback is what runs by default and is what the
+tests cover. Stated in the README rather than left for someone to discover.
 
 ## Streamlit widget state
 
@@ -131,3 +132,57 @@ rather than erroring. Raised to 8192.
 
 Model discovery also earned its keep: `ListModels` resolved `gemini-2.5-flash`,
 where the hardcoded default would have named an older model.
+
+## Cycle two re-flagged everything that had already settled
+
+Re-running against the next payout compared every row to that payout's UTR, so
+the 236 rows that had settled correctly in cycle one came back as 189
+`LATE_SETTLEMENT` findings — 281 exceptions and ₹419,287 at risk, burying the
+22 findings that had actually changed. A row carrying a payout that has already
+landed is settled, not late, so `reconcile` now takes `prior_utrs`.
+
+Cycle two: 281 exceptions → 70, ₹419,287 → ₹63,311, `LATE_SETTLEMENT` 189 → 0.
+The resolution numbers were unaffected, which is the point — they were reading
+`UNRESOLVED_NO_ROW`, not the noise around it.
+
+Scoring needed the same correction. Cycle one expects the late orders to be
+open; by cycle two they should be closed, so `score()` takes the cycle and
+expects only the genuine phantoms. Grading cycle two against cycle one's
+expectation counted every correct resolution as a miss.
+
+## Every screen but one was stuck on cycle one
+
+Cycle two is stored alongside cycle one rather than replacing it, because the
+resolution table needs both. The consequence went unnoticed: the queue, the
+audit trail, the accuracy page and the Q&A all read the first result and had no
+way to see the second. The loop closed in one table and nowhere else. A sidebar
+switch now selects which cycle every page reads, with briefs and answers cached
+per cycle so switching does not silently show stale text.
+
+## Retrieval could not see what a question was about
+
+"How much am I being overcharged in fees?" returned *the facts do not specify*.
+That was the grounding working exactly as designed — and the retrieval failing.
+`select_context` knew two modes, an explicit id or the largest amounts by value,
+and fee mismatches are small, so they never survived the top-40 cut. The model
+was never shown them and correctly declined to invent a total.
+
+Retrieval now recognises the subject of a question — fee, chargeback, refund,
+duplicate, orphan, split, phantom — and per-type totals are always supplied
+pre-computed. The same question now answers ₹143.95 across 12 exceptions, which
+matches the ledger exactly.
+
+The pool is also ordered by severity before amount, as the exception queue is.
+Sorting by amount alone had the model naming the largest total as the top
+priority while the queue on screen led with the chargebacks.
+
+## Reasoning budget on a call that does not reason
+
+"Why is the payout short this cycle?" took 27.9s and returned 272 words listing
+every exception type. Gemini 2.5 was spending most of that budget on reasoning
+about a question where Python had already done the selection and the
+arithmetic. With `thinkingBudget: 0` and brevity as a hard constraint rather
+than a closing suggestion: 2.8s, 52 words, same figures.
+
+Twenty-eight seconds of dead air is not a latency problem, it is a demo that
+fails in front of the person evaluating it.
